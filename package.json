@@ -1,0 +1,38 @@
+{
+  "name": "signalk-noaa-sonar",
+  "version": "0.1.0",
+  "description": "On-demand NOAA bathymetric sonar chart provider for Signal K / Freeboard. Serves tiles from an MBTiles cache and renders missing tiles from the NOAA ArcGIS ImageServer on the fly.",
+  "main": "plugin/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prepare": "tsc"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk",
+    "signalk-category-chart-plotters",
+    "chart",
+    "noaa",
+    "bathymetry",
+    "sonar",
+    "mbtiles"
+  ],
+  "author": "Joel Kozikowski",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@signalk/server-api": "^2.10.1",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.0",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "^5.4.0"
+  }
+}

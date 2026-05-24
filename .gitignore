@@ -1,0 +1,10 @@
+node_modules/
+plugin/
+*.mbtiles
+*.mbtiles.progress
+*.mbtiles-wal
+*.mbtiles-shm
+*.log
+.DS_Store
+__pycache__/
+*.pyc
