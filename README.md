@@ -67,20 +67,21 @@ chart list.
 
 ## Bulk pre-rendering (optional)
 
-`tools/noaa_sonar_to_mbtiles.py` fills the same MBTiles cache for a chosen
+`tools/noaa-sonar-to-mbtiles.js` fills the same MBTiles cache for a chosen
 bounding box, using a quadtree walk that skips empty ocean. It is **resumable**
 and **additive** — run it repeatedly (wider area, deeper zoom) into the same
 file.
 
 ```bash
-python3 tools/noaa_sonar_to_mbtiles.py \
+node tools/noaa-sonar-to-mbtiles.js \
   --out noaa-sonar.mbtiles \
   --bbox -82.0 24.4 -80.05 25.6 \
   --min-zoom 10 --max-zoom 18
 ```
 
-Requires Python 3 with Pillow. Point the plugin's "MBTiles cache file" at the
-resulting file.
+Run it from the package root so it can use the bundled `better-sqlite3` and
+`pngjs` (no extra dependencies). Point the plugin's "MBTiles cache file" at the
+resulting file. `--help` lists all options.
 
 ## Offline distribution (optional)
 

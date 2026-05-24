@@ -32,7 +32,7 @@ XYZ tiles by calling `exportImage` with the tile's web-mercator bounding box.
 | `src/source.ts` | `NoaaSource` — builds the `exportImage` URL, fetches, classifies data/empty/error. |
 | `src/tiles.ts` | XYZ ⇄ EPSG:3857 math and the XYZ ⇄ TMS row flip. |
 | `src/validate.ts` | Tile-coordinate validation for the HTTP route. |
-| `tools/noaa_sonar_to_mbtiles.py` | Standalone Python bulk builder (quadtree, resumable). |
+| `tools/noaa-sonar-to-mbtiles.js` | Standalone Node bulk builder (quadtree, resumable). |
 | `plugin/` | TypeScript build output (gitignored; produced by `tsc` / `npm run build`). |
 
 ## The chart-provider contract (Signal K / Freeboard)
@@ -53,14 +53,14 @@ fit on-demand fetching.
 
 ## Core invariants — DO NOT BREAK
 
-1. **Two files, two meanings, shared with the Python tool.**
+1. **Two files, two meanings, shared with the bulk tool.**
    - `noaa-sonar.mbtiles` table `tiles(zoom_level, tile_column, tile_row,
      tile_data)` holds **DATA tiles only** (never a fully-transparent tile).
    - `noaa-sonar.mbtiles.progress` table `visited(z, x, y)` records **every tile
      that has been resolved**, data *or* empty.
    - Therefore a tile is: **served** if in `tiles`; **known-empty → 404** if in
      `visited` but not `tiles`; **unknown → fetch** otherwise.
-   - *Why it matters:* the Python bulk tool walks a quadtree and treats "present
+   - *Why it matters:* the bulk tool walks a quadtree and treats "present
      in `tiles`" as "has data, descend into children." If the plugin ever stored
      a transparent tile in `tiles`, a later bulk run would recurse into empty
      ocean and explode the tile count. Hence `source.ts` checks the alpha channel
@@ -68,13 +68,13 @@ fit on-demand fetching.
 
 2. **Row convention.** MBTiles stores **TMS** rows (origin bottom-left); XYZ/
    Freeboard use top-left. `tiles.ts#flipRow` converts (`2^z - 1 - y`). `tiles`
-   is keyed by TMS row; `visited` is keyed by **XYZ** `y` (matching the Python
+   is keyed by TMS row; `visited` is keyed by **XYZ** `y` (matching the bulk
    tool). Keep these consistent across both tools.
 
-3. **Tile geometry must match the Python tool exactly.** Both writers must agree
-   on each tile's bbox or they'd cache misaligned imagery. `src/tiles.ts` is a
-   line-for-line port of the Python math; verified by an exact bbox comparison.
-   If you change one, change both and re-verify.
+3. **Tile geometry must match the bulk tool exactly.** Both writers must agree
+   on each tile's bbox or they'd cache misaligned imagery. `src/tiles.ts` and
+   `tools/noaa-sonar-to-mbtiles.js` use identical math; verified by an exact
+   bbox comparison. If you change one, change both and re-verify.
 
 ## Implementation notes / gotchas
 
