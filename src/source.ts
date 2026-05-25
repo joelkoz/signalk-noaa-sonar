@@ -19,7 +19,7 @@ export interface FetchResult {
 }
 
 const USER_AGENT =
-  'signalk-noaa-sonar/0.2 (https://github.com/joelkoz/signalk-noaa-sonar)'
+  'signalk-noaa-sonar-charts/1.0 (https://github.com/joelkoz/signalk-noaa-sonar-charts)'
 const HTTP_TIMEOUT = 60000
 const HTTP_RETRIES = 4
 

@@ -1,19 +1,17 @@
 import path from 'path'
 import fs from 'fs'
-import sharp from 'sharp'
 import { Request, Response, Application } from 'express'
 import {
   Plugin,
   ServerAPI,
   ResourceProviderRegistry
 } from '@signalk/server-api'
-import { CHARTS, ChartDef } from './charts'
+import { CHARTS, ChartDef, cacheBaseName } from './charts'
 import { sqliteAvailable, sqliteLoadError, packageRoot } from './db'
 import { TileCache } from './cache'
 import { LandMask } from './landmask'
 import { buildLandDb } from './landbuild'
-import { fetchExportImage, fetchWmts, isFullyTransparent } from './source'
-import { tileBBox3857 } from './tiles'
+import { produceTile } from './produce'
 import { validateTileCoords } from './validate'
 
 const TILE_BASE = '/signalk/noaa-sonar/chart-tiles'
@@ -22,17 +20,19 @@ const V2 = '/signalk/v2/api/resources'
 const WORLD_BOUNDS: [number, number, number, number] = [
   -180, -85.05112878, 180, 85.05112878
 ]
-const WMTS_NATIVE_PX = 512 // BlueTopo gridset tile size
-const OUT_PX = 256 // we always emit 256px XYZ tiles
 
 interface Config {
   fetchOnMiss: boolean
+  // Per-chart baked opacity, keyed by cache base name (e.g. 'noaa-sonar').
+  opacity?: Record<string, number>
 }
 
 interface ChartProviderApp
   extends ServerAPI,
     ResourceProviderRegistry,
     Application {
+  // Plugin data directory: <configPath>/plugin-config-data/<pluginId>
+  getDataDirPath: () => string
   config: {
     ssl: boolean
     configPath: string
@@ -48,7 +48,8 @@ module.exports = (app: ChartProviderApp): Plugin => {
   let routesRegistered = false
   let providerRegistered = false
 
-  const dataDir = path.join(app.config.configPath, 'noaa-sonar-data')
+  // Plugin-owned data dir (<configPath>/plugin-config-data/<pluginId>).
+  const dataDir = app.getDataDirPath()
   const chartsDir = path.join(dataDir, 'charts')
   const landDbPath = path.join(dataDir, 'land.sqlite')
 
@@ -73,10 +74,31 @@ module.exports = (app: ChartProviderApp): Plugin => {
     properties: {
       fetchOnMiss: {
         type: 'boolean',
-        title: 'Download missing tiles when online',
-        description:
-          'When ON, tiles not yet cached are fetched from NOAA and saved. Turn OFF for cellular/offline (serve only what is cached).',
+        title: 'Download missing tiles dynamically',
+        description: '(disable for offline viewing)',
         default: true
+      },
+      opacity: {
+        type: 'object',
+        title: 'Baked layer opacity (advanced)',
+        description:
+          'Opacity (0–1) baked into each layer as its tiles are cached, so the ' +
+          'three layers stack sensibly without per-layer tuning in Freeboard ' +
+          '(leave Freeboard layer opacity at 100%). Most users will not change ' +
+          "these. A change only affects tiles fetched afterward — clear that " +
+          "chart's cache to re-bake existing tiles.",
+        properties: Object.fromEntries(
+          CHARTS.map((c) => [
+            cacheBaseName(c.id),
+            {
+              type: 'number',
+              title: c.name,
+              default: c.opacity,
+              minimum: 0,
+              maximum: 1
+            }
+          ])
+        )
       }
     }
   })
@@ -99,84 +121,12 @@ module.exports = (app: ChartProviderApp): Plugin => {
       : { ...base, url, layers: [] }
   }
 
-  // --- per-miss producers --------------------------------------------------
-
-  // exportImage chart (sonar): one 256px tile, optional mask (off for sonar).
-  const produceExport = async (
-    chart: ChartDef,
-    cache: TileCache,
-    z: number,
-    x: number,
-    y: number
-  ): Promise<Buffer | null> => {
-    if (chart.source.kind !== 'exportimage') return null
-    const res = await fetchExportImage(chart.source.serviceUrl, z, x, y, OUT_PX)
-    if (res.status === 'error') throw new Error('upstream error')
-    if (res.status === 'empty' || !res.body) {
-      cache.markEmpty(z, x, y)
-      return null
-    }
-    cache.putData(z, x, y, res.body)
-    return res.body
-  }
-
-  // wmts chart (BlueTopo): fetch the parent 512px tile, mask land, split into
-  // four native-resolution 256px children (z-1 -> z), cache all four.
-  const produceWmts = async (
-    chart: ChartDef,
-    cache: TileCache,
-    z: number,
-    x: number,
-    y: number
-  ): Promise<Buffer | null> => {
-    if (chart.source.kind !== 'wmts') return null
-    const pz = z - 1
-    const pcol = x >> 1
-    const prow = y >> 1
-    const res = await fetchWmts(
-      chart.source.base,
-      chart.source.layer,
-      chart.source.style,
-      chart.source.format,
-      pz,
-      pcol,
-      prow
-    )
-    if (res.status === 'error') throw new Error('upstream error')
-    if (res.status === 'empty' || !res.body) {
-      // whole 512 is empty -> all four children are empty
-      for (const [cx, cy] of childrenOf(pcol, prow)) cache.markEmpty(z, cx, cy)
-      return null
-    }
-
-    // Mask land out of the 512 before splitting.
-    let img = res.body
-    if (chart.mask && landMask?.ready) {
-      const svg = landMask.maskSvg(tileBBox3857(pcol, prow, pz), WMTS_NATIVE_PX)
-      if (svg) {
-        img = await sharp(img)
-          .ensureAlpha()
-          .composite([{ input: svg, blend: 'dest-out' }])
-          .png()
-          .toBuffer()
-      }
-    }
-
-    // Split into four 256px quadrants = the four XYZ children at zoom z.
-    for (const [cx, cy] of childrenOf(pcol, prow)) {
-      const quad = await sharp(img)
-        .extract({
-          left: (cx - pcol * 2) * OUT_PX,
-          top: (cy - prow * 2) * OUT_PX,
-          width: OUT_PX,
-          height: OUT_PX
-        })
-        .png()
-        .toBuffer()
-      if (await isFullyTransparent(quad)) cache.markEmpty(z, cx, cy)
-      else cache.putData(z, cx, cy, quad)
-    }
-    return cache.getTile(z, x, y)
+  // Effective baked opacity for a chart: config override (by cache base name)
+  // falls back to the chart's default, clamped to 0..1.
+  const opacityFor = (chart: ChartDef): number => {
+    const v = props.opacity?.[cacheBaseName(chart.id)]
+    const o = typeof v === 'number' ? v : chart.opacity
+    return Math.max(0, Math.min(1, o))
   }
 
   const handleTile = async (req: Request, res: Response): Promise<void> => {
@@ -208,10 +158,15 @@ module.exports = (app: ChartProviderApp): Plugin => {
     }
 
     try {
-      const png =
-        chart.source.kind === 'wmts'
-          ? await produceWmts(chart, cache, iz, ix, iy)
-          : await produceExport(chart, cache, iz, ix, iy)
+      const png = await produceTile(
+        chart,
+        cache,
+        landMask,
+        iz,
+        ix,
+        iy,
+        opacityFor(chart)
+      )
       if (png) sendPng(res, png)
       else res.sendStatus(404)
     } catch (e) {
@@ -306,7 +261,10 @@ module.exports = (app: ChartProviderApp): Plugin => {
       fs.mkdirSync(chartsDir, { recursive: true })
       caches = new Map()
       for (const c of CHARTS) {
-        caches.set(c.id, new TileCache(path.join(chartsDir, `${c.id}.mbtiles`)))
+        caches.set(
+          c.id,
+          new TileCache(path.join(chartsDir, `${cacheBaseName(c.id)}.mbtiles`))
+        )
       }
       if (!routesRegistered) {
         registerRoutes()
@@ -327,15 +285,6 @@ module.exports = (app: ChartProviderApp): Plugin => {
   }
 
   return plugin
-}
-
-function childrenOf(pcol: number, prow: number): Array<[number, number]> {
-  return [
-    [pcol * 2, prow * 2],
-    [pcol * 2 + 1, prow * 2],
-    [pcol * 2, prow * 2 + 1],
-    [pcol * 2 + 1, prow * 2 + 1]
-  ]
 }
 
 function sendPng(res: Response, body: Buffer): void {

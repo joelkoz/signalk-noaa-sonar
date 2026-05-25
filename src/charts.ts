@@ -26,6 +26,11 @@ export interface ChartDef {
   description: string
   source: SourceDef
   mask: boolean // mask out land before caching/serving
+  // Baked-in layer opacity (0..1) applied to each tile's alpha before caching,
+  // so the layers stack sensibly without per-layer opacity tuning in Freeboard.
+  // (Equivalent to setting this layer's opacity in Freeboard; leave Freeboard at
+  // 100%. Changing it later requires clearing that chart's cache.)
+  opacity: number
   minzoom: number
   maxzoom: number
 }
@@ -34,18 +39,24 @@ const NOAA_BAG =
   'https://gis.ngdc.noaa.gov/arcgis/rest/services/bag_hillshades_subsets/ImageServer'
 const BLUETOPO_WMTS = 'https://nowcoast.noaa.gov/geoserver/gwc/service/wmts'
 
+// Chart ids carry an `_nsNN-` prefix to control the default stacking order in
+// Freeboard (users never see ids). The prefix is stripped for cache filenames
+// so existing caches (e.g. noaa-sonar.mbtiles) stay valid.
+export const cacheBaseName = (id: string): string => id.replace(/^_ns\d+-/, '')
+
 export const CHARTS: ChartDef[] = [
   {
-    id: 'noaa-sonar',
-    name: 'NOAA Hi-Res Sonar',
-    description: 'NOAA high resolution bathymetric sonar (BAG hillshade subsets)',
+    id: '_ns01-noaa-sonar',
+    name: 'NOAA Hi-Res Relief',
+    description: 'NOAA high resolution underwater relief (BAG hillshade subsets)',
     source: { kind: 'exportimage', serviceUrl: NOAA_BAG },
     mask: false, // exportImage nodata is already transparent
+    opacity: 0.75,
     minzoom: 1,
     maxzoom: 18
   },
   {
-    id: 'bluetopo-relief',
+    id: '_ns02-bluetopo-relief',
     name: 'BlueTopo Relief',
     description: 'NOAA BlueTopo seafloor relief (hillshade), land masked',
     source: {
@@ -56,13 +67,14 @@ export const CHARTS: ChartDef[] = [
       format: 'image/png8'
     },
     mask: true,
+    opacity: 0.5,
     minzoom: 1,
     maxzoom: 21 // BlueTopo native gridset is 512px to z20 -> 256px to z21
   },
   {
-    id: 'bluetopo-bathymetry',
-    name: 'BlueTopo Bathymetry',
-    description: 'NOAA BlueTopo colorized depth, land masked',
+    id: '_ns03-bluetopo-bathymetry',
+    name: 'BlueTopo Depth Color',
+    description: 'NOAA BlueTopo colorized depth indicator, land masked',
     source: {
       kind: 'wmts',
       base: BLUETOPO_WMTS,
@@ -71,6 +83,7 @@ export const CHARTS: ChartDef[] = [
       format: 'image/png8'
     },
     mask: true,
+    opacity: 0.3,
     minzoom: 1,
     maxzoom: 21
   }

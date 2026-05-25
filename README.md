@@ -1,114 +1,96 @@
 # signalk-noaa-sonar-charts
 
 A Signal K chart provider for high resolution underwater relief charts around the
-United States. It registers three chart layers and serves their tiles from local
-MBTiles caches, rendering any missing tile on demand from NOAA and saving it. So
-the charts **work offline** from whatever's cached, and the cache **grows as you
-use it**.
+United States. It adds three chart layers to Freeboard-SK and serves their tiles
+from local caches, fetching any missing tile from NOAA on demand and saving it —
+so the charts **work offline** from whatever you've already viewed, and the cache
+**grows as you use it**.
 
-| Chart | Source | Land masked? |
-|---|---|---|
-| **NOAA Sonar** | NOAA NCEI BAG hillshade (ArcGIS ImageServer `exportImage`) | no |
-| **BlueTopo Relief** | NOAA BlueTopo hillshade (GeoServer WMTS) | **yes** |
-| **BlueTopo Bathymetry** | NOAA BlueTopo colorized depth (GeoServer WMTS) | **yes** |
+| Chart | Description |
+|---|---|
+| **NOAA Hi-Res Relief** | High resolution relief (coverage limited) |
+| **BlueTopo Relief** | Mid resolution underwater relief |
+| **BlueTopo Depth Color** | Colorized depth indicator |
 
-The two BlueTopo layers are **land-masked**: land is made transparent so it
-doesn't cover the land features of your base chart. Stack them in Freeboard at
-whatever opacities you like (e.g. relief under bathymetry) — over water you see
-the seafloor; over land your base chart shows through.
-
-### Why this exists
-
-NOAA's original `bag_hillshades` tile cache was retired; that data now comes from
-an ImageServer with no tile cache (rendered per tile via `exportImage`). BlueTopo
-is a WMTS tile cache but covers land, which obscures other charts. This plugin
-bridges both and adds the land mask.
-
-## Design goals
-
-Purpose-built, **not** a generic chart-cache server. The three sources are
-hard-coded — there's essentially **one setting** (online fetch on/off). Less to
-configure, easier for a non-technical user.
+The two BlueTopo layers have **land masked out** (made transparent) so they don't
+cover the land features of your base chart. The three layers are pre-set to stack
+nicely — add them all in Freeboard and leave each layer's opacity at 100%.
 
 ## Requirements
 
-- Node.js ≥ 18 (uses global `fetch`).
-- Native modules `better-sqlite3` and `sharp` (prebuilt binaries cover Pi/arm64,
-  Linux, macOS).
-- Signal K server with Freeboard-SK v2+.
+- Signal K server with Freeboard-SK v2 or later.
+- Node.js ≥ 18.
 
-## Install
+## Installation
 
-**From the Signal K App Store** (recommended): open the Signal K server admin UI →
-**Appstore → Available**, search for *NOAA Sonar Charts*, install, and restart.
-
-**From source** (development):
+Install from your Signal K configuration directory (usually `~/.signalk`):
 
 ```bash
-cd signalk-noaa-sonar-charts
-npm install        # builds via the `prepare` hook (tsc -> plugin/)
-npm link
 cd ~/.signalk
-npm link signalk-noaa-sonar-charts
+npm install signalk-noaa-sonar-charts
 ```
 
-Then **Server → Plugin Config → "NOAA Sonar Chart Provider"** → enable. The three
-charts then appear in Freeboard's chart list.
+Then **restart Signal K** and enable the plugin under **Server → Plugin Config →
+"NOAA Sonar Chart Provider"**. The config screen should show
+**✅ better-sqlite3 is installed**, and the three charts appear in Freeboard's
+chart list.
 
-> **If the config screen shows `❌ better-sqlite3 is NOT installed`** (the App
-> Store installs with `--ignore-scripts`, which skips its native build): open a
-> terminal in the plugin directory and run `npm install better-sqlite3`, then
-> restart Signal K. The plugin reports this state instead of crashing.
+> **If the config screen shows `❌ better-sqlite3 is NOT installed`** — this can
+> happen if the plugin was added from the Signal K App Store — just run the
+> install command above and restart Signal K. That completes the one-time setup.
 
 ## Configuration
 
 | Setting | Default | Notes |
 |---|---|---|
-| Download missing tiles when online | `true` | Turn **off** for cellular/offline (serve only cached tiles). |
+| Download missing tiles dynamically | on | Disable for offline viewing (serve only tiles already cached). |
+| Baked layer opacity (advanced) | 0.75 / 0.50 / 0.30 | Per-layer opacity baked into the tiles so the layers stack well. Most users won't change these. |
 
-Caches live in `<signalk-config>/noaa-sonar-data/charts/<chart-id>.mbtiles`.
-Keeping them outside `<signalk-config>/charts` avoids having the generic Signal K
-charts plugin publish the same chart identifiers with its static tile route.
+Tile caches are stored in the plugin's data directory
+(`<signalk-config>/plugin-config-data/noaa-sonar-chart-provider/`).
 
-## Land data (one-time)
+## Land masking (one-time download)
 
-Masking needs a coastline dataset. On first run the plugin **auto-downloads** OSM
-land polygons and builds `<signalk-config>/noaa-sonar-data/land.sqlite` (a large
-one-time download). Until it's ready, BlueTopo tiles are served unmasked. To
-pre-build it on a faster machine and copy it over:
+To mask out land, the plugin downloads a worldwide coastline dataset the first
+time it runs (stored in the plugin's data directory). It's a large, one-time
+download that happens automatically in the background; until it finishes, the
+BlueTopo layers are shown without land masking. On a slow connection you can
+pre-build this dataset on another computer and copy it over — see
+[AGENTS.md](AGENTS.md).
 
-```bash
-npm run build
-node tools/build-land-db.js land.sqlite
-# copy land.sqlite to <signalk-config>/noaa-sonar-data/ on the Pi
-```
+## Pre-loading an area (optional)
 
-## Bulk pre-rendering (optional, NOAA Sonar)
-
-`tools/noaa-sonar-to-mbtiles.js` fills the **NOAA Sonar** cache for a bounding
-box, using a quadtree that skips empty ocean. Resumable and additive.
+By default, tiles are fetched as you view them. To pre-load an area in advance
+(e.g. before heading offline), use the bundled `noaa-sonar-charts` command from
+your Signal K configuration directory:
 
 ```bash
-node tools/noaa-sonar-to-mbtiles.js \
-  --out ~/.signalk/noaa-sonar-data/charts/noaa-sonar.mbtiles \
-  --bbox -82.0 24.4 -80.05 25.6 --min-zoom 10 --max-zoom 18
+cd ~/.signalk
+npx noaa-sonar-charts --bbox -82.0 24.4 -80.05 25.6
 ```
 
-## Offline distribution (optional)
+`--bbox` is **west south east north** in decimal degrees (WGS84) — west/east are
+longitude, south/north are latitude, and western longitudes / southern latitudes
+are negative. The example above covers the Florida Keys.
 
-The caches are plain MBTiles, so you can convert one to
-[PMTiles](https://github.com/protomaps/go-pmtiles) for a portable read-only
-archive if you wish.
+It pre-loads all three layers by default. Choose layers with `+`/`-` (default
+`+all`): e.g. `-all +color` for only Depth Color, or `+all -hi` to skip the
+hi-res layer. Other options: `--min-zoom`, `--max-zoom`, `--workers`, `--dir`.
+Run `npx noaa-sonar-charts` with no arguments for full help.
+
+It is resumable and additive — re-run it to extend the area or add zoom levels.
 
 ## Data sources & attribution
 
 - NOAA NCEI bathymetric sonar (BAG hillshade subsets).
-- NOAA Office of Coast Survey **BlueTopo** via nowCOAST WMTS.
+- NOAA Office of Coast Survey **BlueTopo** via nowCOAST.
 - Coastline: OpenStreetMap land polygons (© OpenStreetMap contributors, ODbL).
 
-NOAA data is public domain. **Not for navigation.**
+NOAA data is in the public domain. **This plugin is not for navigation.**
 
 ## License
 
-Apache-2.0 — see [AGENTS.md](AGENTS.md) for architecture and implementation
-details.
+Apache-2.0.
+
+Developers: see [AGENTS.md](AGENTS.md) for architecture, build/development setup,
+and implementation notes.

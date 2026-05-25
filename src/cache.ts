@@ -81,6 +81,16 @@ export class TileCache {
     this.insVisited.run(z, x, y)
   }
 
+  /** XYZ {x, y} of every DATA tile stored at zoom z (used by the bulk walk). */
+  dataTilesAt(z: number): Array<{ x: number; y: number }> {
+    const rows = this.db
+      .prepare(
+        'SELECT tile_column AS c, tile_row AS r FROM tiles WHERE zoom_level=?'
+      )
+      .all(z) as Array<{ c: number; r: number }>
+    return rows.map((row) => ({ x: row.c, y: flipRow(row.r, z) }))
+  }
+
   close(): void {
     this.db.close()
     this.progress.close()

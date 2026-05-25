@@ -2,7 +2,7 @@
 
 Guidance for AI agents (and humans) working on **signalk-noaa-sonar**. Read this
 before changing code. For install/config/usage see [README.md](README.md); this
-covers *how it works* and the invariants not to break.
+covers *how it works* and the invariants not to break. Note that the README.md is end user facing, so keep only usage instructions there. Development notes should be added to this AGENTS.md
 
 ## What this app is
 
@@ -15,27 +15,45 @@ hard-coded and there is essentially one user setting (`fetchOnMiss`).
 
 ## The three charts (src/charts.ts)
 
-| id | source kind | mask | tiles |
-|---|---|---|---|
-| `noaa-sonar` | `exportimage` (ArcGIS ImageServer) | no | 256px direct |
-| `bluetopo-relief` | `wmts` (GeoServer GWC) | yes | 512px native → 4×256 |
-| `bluetopo-bathymetry` | `wmts` (GeoServer GWC) | yes | 512px native → 4×256 |
+| id | name | source kind | mask | opacity | tiles |
+|---|---|---|---|---|---|
+| `_ns01-noaa-sonar` | NOAA Hi-Res Relief | `exportimage` (ArcGIS ImageServer) | no | 0.75 | 256px direct |
+| `_ns02-bluetopo-relief` | BlueTopo Relief | `wmts` (GeoServer GWC) | yes | 0.50 | 512px native → 4×256 |
+| `_ns03-bluetopo-bathymetry` | BlueTopo Depth Color | `wmts` (GeoServer GWC) | yes | 0.30 | 512px native → 4×256 |
+
+**Ids & cache names:** ids carry an `_nsNN-` prefix purely to set Freeboard's
+default stacking order (users never see ids; the prefix drives the tile URL and
+resource-map key). `cacheBaseName(id)` strips the prefix for the `.mbtiles`
+filename, so caches are `noaa-sonar.mbtiles`, `bluetopo-relief.mbtiles`,
+`bluetopo-bathymetry.mbtiles` (stable across id renames). Renaming an id is safe
+for caches but changes the Freeboard chart identity.
+
+**Baked opacity:** each chart's `opacity` (0..1) is multiplied into the tile's
+alpha before caching (`alphaBakeOp` — a sharp `dest-in` composite against a
+uniform alpha=factor source; RGB untouched). Equivalent to setting that layer's
+opacity in Freeboard, so users leave Freeboard layer opacity at 100% and the
+three layers stack sensibly. Defaults live in `charts.ts` and are also exposed in
+the plugin config (`opacity.<baseName>`, resolved by `opacityFor()`); config
+overrides the default. It's baked into the cache, so a change only affects
+tiles fetched afterward — clear that chart's cache to re-bake. The bulk tool
+applies the same factor (`--opacity`, default 0.75).
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `src/index.ts` | Plugin entry: chart/route/provider registration, per-miss producers, dispatch. |
-| `src/charts.ts` | Hard-coded `ChartDef[]` (URLs, layers, mask flag, zoom ranges). |
+| `src/index.ts` | Plugin entry: chart/route/provider registration, request dispatch, opacity resolution. |
+| `src/produce.ts` | **Shared producers** (`produceTile`): fetch + mask + opacity + retile + cache. Used by the plugin (per request) **and** the bulk tool. |
+| `src/charts.ts` | Hard-coded `ChartDef[]` + `cacheBaseName()`. |
 | `src/source.ts` | Upstream fetch: `fetchExportImage`, `fetchWmts`, `isFullyTransparent` (all via `sharp`). |
-| `src/cache.ts` | `TileCache`: better-sqlite3 read/write of one chart's `.mbtiles` + `.progress`. |
+| `src/cache.ts` | `TileCache`: better-sqlite3 read/write of one chart's `.mbtiles` + `.progress` (incl. `dataTilesAt` for the bulk walk). |
 | `src/landmask.ts` | `LandMask`: query land R*Tree, emit an SVG of land in pixel space. |
 | `src/landbuild.ts` | One-time builder: download OSM land polygons → `land.sqlite` R*Tree. |
 | `src/tiles.ts` | XYZ↔EPSG:3857 math, XYZ↔TMS row flip. |
 | `src/validate.ts` | Tile-coordinate validation. |
-| `tools/noaa-sonar-to-mbtiles.js` | Bulk pre-fill for the sonar chart (quadtree, resumable). |
+| `tools/noaa-sonar-to-mbtiles.js` | Bulk pre-fill for any/all charts via the shared producer (quadtree, resumable). Exposed as the **`noaa-sonar-charts`** bin. |
 | `tools/build-land-db.js` | Standalone land.sqlite builder. |
-| `plugin/` | TS build output (gitignored). |
+| `plugin/` | TS build output (gitignored; shipped in the npm tarball via `files`). |
 
 ## Chart-provider contract (Signal K / Freeboard)
 
@@ -47,10 +65,13 @@ hard-coded and there is essentially one user setting (`fetchOnMiss`).
   `GET /signalk/noaa-sonar/chart-tiles/:identifier/:z/:x/:y`.
 - Advertised `bounds` are worldwide (the cache may grow anywhere); per-tile 404s
   mark the gaps.
-- Keep this plugin's live MBTiles caches outside `<config>/charts`. The generic
-  `@signalk/charts-plugin` scans that directory and can publish the same chart
-  identifiers with `/signalk/chart-tiles/...`, causing Freeboard to request the
-  wrong endpoint.
+- Data dir = `app.getDataDirPath()` = `<config>/plugin-config-data/<pluginId>`
+  (pluginId `noaa-sonar-chart-provider`); caches go in `<dataDir>/charts/`, land
+  data in `<dataDir>/land.sqlite`. This is outside `<config>/charts` on purpose:
+  the generic `@signalk/charts-plugin` scans `<config>/charts` and would publish
+  the same chart ids with `/signalk/chart-tiles/...`, making Freeboard hit the
+  wrong endpoint. The bulk tool can't call `getDataDirPath()` (no `app`), so it
+  reconstructs the same path for its `--dir` default (override with `--dir`).
 
 ## Tile request flow (per chart)
 
@@ -100,14 +121,40 @@ hard-coded and there is essentially one user setting (`fetchOnMiss`).
 decode+encode ≈ 12 ms · +mask ≈ 23–34 ms · +retile to 4×256 ≈ 42 ms. Paid once
 per tile, then it's a pure cache hit. Network fetch dominates first-view latency.
 
-## Build & test
+## Development & build
+
+From source (for development):
+
+```bash
+git clone https://github.com/joelkoz/signalk-noaa-sonar-charts
+cd signalk-noaa-sonar-charts
+npm install        # builds via the `prepare` hook (tsc -> plugin/)
+npm link
+cd ~/.signalk && npm link signalk-noaa-sonar-charts
+```
 
 - Build: `npm run build` (or `npm install` → `prepare` runs `tsc`).
+- Pre-build the land DB (so an end user on a slow link can skip the large
+  first-run download), then copy it across:
+  ```bash
+  npm run build
+  node tools/build-land-db.js land.sqlite
+  # copy land.sqlite to <signalk-config>/noaa-sonar-data/
+  ```
+- **Bulk tool walk** (`tools/noaa-sonar-to-mbtiles.js`): BFS by served zoom over
+  the bbox, calling the shared `produceTile`. Base level = bbox tile range; deeper
+  levels = children (in cache) of the previous level's `dataTilesAt`, so empty
+  ocean is pruned. For wmts charts it collapses each level's candidates to one
+  representative per parent 512 (`x>>1,y>>1`) — since one parent fetch caches all
+  four children — avoiding redundant fetches. `cache.isVisited` makes it
+  resumable. Uses `chart.opacity` (the plugin's config override doesn't apply
+  here). Selectors resolve `+/-{all,hi,relief,color}` left-to-right (default
+  `+all`).
 - No bundled runner; behavior was validated with fake-`app` harnesses covering:
   mask alignment (synthetic land polygon erases exactly the right pixels), 3-chart
   metadata, sonar fetch (256, unmasked), BlueTopo retile+mask+sibling-caching,
-  negative caching, and cache-only mode. Recreate that style of check after
-  changes to request handling or tile math.
+  negative caching, cache-only mode, and the bulk tool filling all three caches.
+  Recreate that style of check after changes to request handling or tile math.
 
 ## Native dependencies & the App Store
 

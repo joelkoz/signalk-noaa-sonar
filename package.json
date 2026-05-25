@@ -1,8 +1,11 @@
 {
   "name": "signalk-noaa-sonar-charts",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "NOAA high-resolution underwater relief charts (NOAA sonar + BlueTopo bathymetry/relief) for Signal K / Freeboard. Renders missing tiles on demand into an MBTiles cache and masks out land.",
   "main": "plugin/index.js",
+  "bin": {
+    "noaa-sonar-charts": "tools/noaa-sonar-to-mbtiles.js"
+  },
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
