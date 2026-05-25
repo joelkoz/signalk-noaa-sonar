@@ -8,3 +8,6 @@ plugin/
 .DS_Store
 __pycache__/
 *.pyc
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

@@ -1,41 +1,31 @@
 import path from 'path'
+import fs from 'fs'
+import sharp from 'sharp'
 import { Request, Response, Application } from 'express'
 import {
   Plugin,
   ServerAPI,
   ResourceProviderRegistry
 } from '@signalk/server-api'
+import { CHARTS, ChartDef } from './charts'
 import { TileCache } from './cache'
-import { NoaaSource } from './source'
+import { LandMask } from './landmask'
+import { buildLandDb } from './landbuild'
+import { fetchExportImage, fetchWmts, isFullyTransparent } from './source'
+import { tileBBox3857 } from './tiles'
 import { validateTileCoords } from './validate'
 
-const NOAA_BAG_SUBSETS =
-  'https://gis.ngdc.noaa.gov/arcgis/rest/services/bag_hillshades_subsets/ImageServer'
-
-const CHART_ID = 'noaa-sonar'
 const TILE_BASE = '/signalk/noaa-sonar/chart-tiles'
 const V1 = '/signalk/v1/api/resources'
 const V2 = '/signalk/v2/api/resources'
-
-// A chart whose tiles cover only sparse survey swaths: advertise the whole
-// world so Freeboard never pre-clips a request, and let per-tile 404s mark the
-// gaps. Latitude is bounded by the web-mercator limit.
 const WORLD_BOUNDS: [number, number, number, number] = [
   -180, -85.05112878, 180, 85.05112878
 ]
+const WMTS_NATIVE_PX = 512 // BlueTopo gridset tile size
+const OUT_PX = 256 // we always emit 256px XYZ tiles
 
 interface Config {
-  mbtilesPath: string
-  serviceUrl: string
   fetchOnMiss: boolean
-  minzoom: number
-  maxzoom: number
-  name: string
-  description: string
-  minLon?: number
-  minLat?: number
-  maxLon?: number
-  maxLat?: number
 }
 
 interface ChartProviderApp
@@ -51,107 +41,138 @@ interface ChartProviderApp
 }
 
 module.exports = (app: ChartProviderApp): Plugin => {
-  let cache: TileCache | null = null
-  let source: NoaaSource | null = null
-  let props: Config
+  let props: Config = { fetchOnMiss: true }
+  let caches: Map<string, TileCache> = new Map()
+  let landMask: LandMask | null = null
   let routesRegistered = false
   let providerRegistered = false
 
-  const defaultMbtiles = path.join(
-    app.config.configPath,
-    'charts',
-    'noaa-sonar.mbtiles'
-  )
+  const chartsDir = path.join(app.config.configPath, 'charts')
+  const dataDir = path.join(app.config.configPath, 'noaa-sonar-data')
+  const landDbPath = path.join(dataDir, 'land.sqlite')
+
+  const byId = (id: string): ChartDef | undefined => CHARTS.find((c) => c.id === id)
 
   const CONFIG_SCHEMA = {
-    title: 'NOAA Sonar Chart Provider',
+    title: 'NOAA Sonar Charts',
+    description:
+      'Adds NOAA sonar and BlueTopo underwater-relief charts. Tiles are cached under ' +
+      `"${chartsDir}". Land masking for the BlueTopo charts needs a one-time land-data download.`,
     type: 'object',
     properties: {
-      mbtilesPath: {
-        type: 'string',
-        title: 'MBTiles cache file',
-        description: `Absolute path, or relative to "${app.config.configPath}". Defaults to "${defaultMbtiles}". Created if missing.`,
-        default: ''
-      },
       fetchOnMiss: {
         type: 'boolean',
-        title: 'Render missing tiles from NOAA (fetch-on-miss)',
+        title: 'Download missing tiles when online',
         description:
-          'When ON, tiles not in the cache are rendered from the NOAA ImageServer and saved. Turn OFF to serve only cached tiles (e.g. on cellular / offline).',
+          'When ON, tiles not yet cached are fetched from NOAA and saved. Turn OFF for cellular/offline (serve only what is cached).',
         default: true
-      },
-      serviceUrl: {
-        type: 'string',
-        title: 'NOAA ImageServer URL',
-        default: NOAA_BAG_SUBSETS
-      },
-      minzoom: { type: 'number', title: 'Min zoom', default: 1 },
-      maxzoom: {
-        type: 'number',
-        title: 'Max zoom',
-        description: 'Native survey resolution is ~0.5 m, around zoom 18.',
-        default: 18
-      },
-      name: { type: 'string', title: 'Chart name', default: 'NOAA Sonar' },
-      description: {
-        type: 'string',
-        title: 'Chart description',
-        default: 'NOAA bathymetric sonar (hillshade)'
-      },
-      minLon: {
-        type: 'number',
-        title: 'Bounds: west longitude (optional)',
-        description:
-          'Leave all four bounds blank for worldwide. Set them to constrain the chart to your cruising area and avoid fetching empty open-ocean tiles.'
-      },
-      minLat: { type: 'number', title: 'Bounds: south latitude (optional)' },
-      maxLon: { type: 'number', title: 'Bounds: east longitude (optional)' },
-      maxLat: { type: 'number', title: 'Bounds: north latitude (optional)' }
+      }
     }
   }
 
-  const resolveMbtilesPath = (p: string): string =>
-    !p
-      ? defaultMbtiles
-      : path.isAbsolute(p)
-        ? p
-        : path.resolve(app.config.configPath, p)
-
-  // The provider advertises the area over which it is willing to serve/fetch
-  // tiles -- NOT the area currently cached. Default is the whole world so the
-  // cache can grow anywhere NOAA has data; set explicit bounds in config to
-  // constrain it to a cruising area (and avoid empty fetches over open ocean).
-  const resolveBounds = (): [number, number, number, number] => {
-    const { minLon, minLat, maxLon, maxLat } = props
-    if ([minLon, minLat, maxLon, maxLat].every((v) => Number.isFinite(v))) {
-      return [minLon!, minLat!, maxLon!, maxLat!]
-    }
-    return WORLD_BOUNDS
-  }
-
-  // Chart resource as Freeboard expects it. `version` selects the v1
-  // (tilemapUrl/chartLayers) vs v2 (url/layers) field shape.
-  const chartMeta = (version: 1 | 2) => {
-    const urlTemplate = `${TILE_BASE}/${CHART_ID}/{z}/{x}/{y}`
+  const chartMeta = (chart: ChartDef, version: 1 | 2) => {
+    const url = `${TILE_BASE}/${chart.id}/{z}/{x}/{y}`
     const base = {
-      identifier: CHART_ID,
-      name: props.name,
-      description: props.description,
+      identifier: chart.id,
+      name: chart.name,
+      description: chart.description,
       type: 'tilelayer',
       scale: 250000,
       format: 'png',
-      bounds: resolveBounds(),
-      minzoom: props.minzoom,
-      maxzoom: props.maxzoom
+      bounds: WORLD_BOUNDS,
+      minzoom: chart.minzoom,
+      maxzoom: chart.maxzoom
     }
     return version === 1
-      ? { ...base, tilemapUrl: urlTemplate, chartLayers: [] }
-      : { ...base, url: urlTemplate, layers: [] }
+      ? { ...base, tilemapUrl: url, chartLayers: [] }
+      : { ...base, url, layers: [] }
+  }
+
+  // --- per-miss producers --------------------------------------------------
+
+  // exportImage chart (sonar): one 256px tile, optional mask (off for sonar).
+  const produceExport = async (
+    chart: ChartDef,
+    cache: TileCache,
+    z: number,
+    x: number,
+    y: number
+  ): Promise<Buffer | null> => {
+    if (chart.source.kind !== 'exportimage') return null
+    const res = await fetchExportImage(chart.source.serviceUrl, z, x, y, OUT_PX)
+    if (res.status === 'error') throw new Error('upstream error')
+    if (res.status === 'empty' || !res.body) {
+      cache.markEmpty(z, x, y)
+      return null
+    }
+    cache.putData(z, x, y, res.body)
+    return res.body
+  }
+
+  // wmts chart (BlueTopo): fetch the parent 512px tile, mask land, split into
+  // four native-resolution 256px children (z-1 -> z), cache all four.
+  const produceWmts = async (
+    chart: ChartDef,
+    cache: TileCache,
+    z: number,
+    x: number,
+    y: number
+  ): Promise<Buffer | null> => {
+    if (chart.source.kind !== 'wmts') return null
+    const pz = z - 1
+    const pcol = x >> 1
+    const prow = y >> 1
+    const res = await fetchWmts(
+      chart.source.base,
+      chart.source.layer,
+      chart.source.style,
+      chart.source.format,
+      pz,
+      pcol,
+      prow
+    )
+    if (res.status === 'error') throw new Error('upstream error')
+    if (res.status === 'empty' || !res.body) {
+      // whole 512 is empty -> all four children are empty
+      for (const [cx, cy] of childrenOf(pcol, prow)) cache.markEmpty(z, cx, cy)
+      return null
+    }
+
+    // Mask land out of the 512 before splitting.
+    let img = res.body
+    if (chart.mask && landMask?.ready) {
+      const svg = landMask.maskSvg(tileBBox3857(pcol, prow, pz), WMTS_NATIVE_PX)
+      if (svg) {
+        img = await sharp(img)
+          .ensureAlpha()
+          .composite([{ input: svg, blend: 'dest-out' }])
+          .png()
+          .toBuffer()
+      }
+    }
+
+    // Split into four 256px quadrants = the four XYZ children at zoom z.
+    for (const [cx, cy] of childrenOf(pcol, prow)) {
+      const quad = await sharp(img)
+        .extract({
+          left: (cx - pcol * 2) * OUT_PX,
+          top: (cy - prow * 2) * OUT_PX,
+          width: OUT_PX,
+          height: OUT_PX
+        })
+        .png()
+        .toBuffer()
+      if (await isFullyTransparent(quad)) cache.markEmpty(z, cx, cy)
+      else cache.putData(z, cx, cy, quad)
+    }
+    return cache.getTile(z, x, y)
   }
 
   const handleTile = async (req: Request, res: Response): Promise<void> => {
     const { identifier, z, x, y } = req.params as Record<string, string>
-    if (identifier !== CHART_ID) {
+    const chart = byId(identifier)
+    const cache = caches.get(identifier)
+    if (!chart || !cache) {
       res.sendStatus(404)
       return
     }
@@ -163,70 +184,62 @@ module.exports = (app: ChartProviderApp): Plugin => {
       res.status(400).send(coordErr)
       return
     }
-    if (!cache) {
-      res.sendStatus(503)
-      return
-    }
 
     const cached = cache.getTile(iz, ix, iy)
-    if (cached) {
-      sendPng(res, cached)
-      return
-    }
-    // Known-empty (resolved before, no data): don't re-fetch.
+    if (cached) return sendPng(res, cached)
     if (cache.isVisited(iz, ix, iy)) {
-      res.sendStatus(404)
+      res.sendStatus(404) // known empty
       return
     }
-    if (!props.fetchOnMiss || !source) {
+    if (!props.fetchOnMiss) {
       res.sendStatus(404)
       return
     }
 
     try {
-      const result = await source.fetchTile(ix, iy, iz)
-      if (result.status === 'data' && result.body) {
-        cache.putData(iz, ix, iy, result.body)
-        sendPng(res, result.body)
-      } else if (result.status === 'empty') {
-        cache.markEmpty(iz, ix, iy)
-        res.sendStatus(404)
-      } else {
-        res.sendStatus(502) // upstream error; leave unresolved so it retries
-      }
+      const png =
+        chart.source.kind === 'wmts'
+          ? await produceWmts(chart, cache, iz, ix, iy)
+          : await produceExport(chart, cache, iz, ix, iy)
+      if (png) sendPng(res, png)
+      else res.sendStatus(404)
     } catch (e) {
-      app.error(`noaa-sonar tile ${iz}/${ix}/${iy}: ${(e as Error).message}`)
-      res.sendStatus(500)
+      app.error(`noaa-sonar ${identifier} ${iz}/${ix}/${iy}: ${(e as Error).message}`)
+      res.sendStatus(502)
     }
   }
 
   const registerRoutes = () => {
     app.get(`${TILE_BASE}/:identifier/:z/:x/:y`, handleTile)
-
-    // v1 Resources API (always available)
     app.get(`${V1}/charts/:identifier`, (req: Request, res: Response) => {
-      if (req.params.identifier === CHART_ID) res.json(chartMeta(1))
+      const c = byId(req.params.identifier)
+      if (c) res.json(chartMeta(c, 1))
       else res.status(404).send('Not found')
     })
     app.get(`${V1}/charts`, (_req: Request, res: Response) => {
-      res.json({ [CHART_ID]: chartMeta(1) })
+      const out: Record<string, unknown> = {}
+      for (const c of CHARTS) out[c.id] = chartMeta(c, 1)
+      res.json(out)
     })
   }
 
   const registerAsProvider = () => {
-    if (providerRegistered || typeof app.registerResourceProvider !== 'function') {
-      return
-    }
+    if (providerRegistered || typeof app.registerResourceProvider !== 'function') return
     try {
       app.registerResourceProvider({
         type: 'charts',
         methods: {
-          listResources: () =>
-            Promise.resolve({ [CHART_ID]: chartMeta(2) }),
-          getResource: (id: string) =>
-            id === CHART_ID
-              ? Promise.resolve(chartMeta(2))
-              : Promise.reject(new Error('Chart not found!')),
+          listResources: () => {
+            const out: Record<string, unknown> = {}
+            for (const c of CHARTS) out[c.id] = chartMeta(c, 2)
+            return Promise.resolve(out)
+          },
+          getResource: (id: string) => {
+            const c = byId(id)
+            return c
+              ? Promise.resolve(chartMeta(c, 2))
+              : Promise.reject(new Error('Chart not found!'))
+          },
           setResource: (id: string) =>
             Promise.reject(new Error(`Not implemented: cannot set ${id}`)),
           deleteResource: (id: string) =>
@@ -235,45 +248,61 @@ module.exports = (app: ChartProviderApp): Plugin => {
       })
       providerRegistered = true
     } catch (e) {
-      app.error(`noaa-sonar: resource provider registration failed: ${e}`)
+      app.error(`noaa-sonar: provider registration failed: ${e}`)
     }
   }
+
+  // Land DB: build it (download) in the background if missing, then open it.
+  const initLandMask = async () => {
+    landMask = new LandMask(landDbPath)
+    if (!landMask.exists()) {
+      app.setPluginStatus('Downloading land data (one-time) for masking...')
+      try {
+        await buildLandDb(landDbPath, (m) => app.debug(m))
+      } catch (e) {
+        app.error(`noaa-sonar: land data build failed: ${(e as Error).message}`)
+        return
+      }
+    }
+    try {
+      landMask.open()
+      app.debug('noaa-sonar: land mask ready')
+      app.setPluginStatus(statusLine())
+    } catch (e) {
+      app.error(`noaa-sonar: opening land db failed: ${(e as Error).message}`)
+    }
+  }
+
+  const statusLine = () =>
+    `Serving ${CHARTS.length} charts` +
+    (props.fetchOnMiss ? ', fetch-on-miss ON' : ', cache-only') +
+    (landMask?.ready ? ', land mask ready' : ', land mask loading…')
 
   const plugin: Plugin = {
     id: 'noaa-sonar-chart-provider',
     name: 'NOAA Sonar Chart Provider',
     schema: () => CONFIG_SCHEMA,
     start: (settings: Partial<Config>) => {
-      props = {
-        mbtilesPath: '',
-        serviceUrl: NOAA_BAG_SUBSETS,
-        fetchOnMiss: true,
-        minzoom: 1,
-        maxzoom: 18,
-        name: 'NOAA Sonar',
-        description: 'NOAA bathymetric sonar (hillshade)',
-        ...settings
+      props = { fetchOnMiss: true, ...settings }
+      fs.mkdirSync(chartsDir, { recursive: true })
+      caches = new Map()
+      for (const c of CHARTS) {
+        caches.set(c.id, new TileCache(path.join(chartsDir, `${c.id}.mbtiles`)))
       }
-      const mbtilesPath = resolveMbtilesPath(props.mbtilesPath)
-      ensureDir(path.dirname(mbtilesPath))
-      cache = new TileCache(mbtilesPath)
-      source = new NoaaSource(props.serviceUrl)
-
       if (!routesRegistered) {
         registerRoutes()
         routesRegistered = true
       }
       registerAsProvider()
-
-      app.setPluginStatus(
-        `Serving ${CHART_ID} from ${mbtilesPath}` +
-          (props.fetchOnMiss ? ' (fetch-on-miss ON)' : ' (cache-only)')
-      )
+      app.setPluginStatus(statusLine())
+      // Kick off land-data init without blocking startup.
+      void initLandMask()
     },
     stop: () => {
-      cache?.close()
-      cache = null
-      source = null
+      for (const c of caches.values()) c.close()
+      caches = new Map()
+      landMask?.close()
+      landMask = null
       app.setPluginStatus('Stopped')
     }
   }
@@ -281,14 +310,17 @@ module.exports = (app: ChartProviderApp): Plugin => {
   return plugin
 }
 
-function sendPng(res: Response, body: Buffer): void {
-  res.set('Content-Type', 'image/png')
-  res.set('Cache-Control', 'public, max-age=7776000') // 90 days
-  res.send(body)
+function childrenOf(pcol: number, prow: number): Array<[number, number]> {
+  return [
+    [pcol * 2, prow * 2],
+    [pcol * 2 + 1, prow * 2],
+    [pcol * 2, prow * 2 + 1],
+    [pcol * 2 + 1, prow * 2 + 1]
+  ]
 }
 
-function ensureDir(dir: string): void {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const fs = require('fs')
-  fs.mkdirSync(dir, { recursive: true })
+function sendPng(res: Response, body: Buffer): void {
+  res.set('Content-Type', 'image/png')
+  res.set('Cache-Control', 'public, max-age=7776000')
+  res.send(body)
 }

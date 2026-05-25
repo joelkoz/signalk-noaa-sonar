@@ -1,129 +1,121 @@
 # AGENTS.md
 
 Guidance for AI agents (and humans) working on **signalk-noaa-sonar**. Read this
-before making changes. For install/config/usage, see [README.md](README.md);
-this file covers *how it works* and *why*, plus the invariants you must not break.
+before changing code. For install/config/usage see [README.md](README.md); this
+covers *how it works* and the invariants not to break.
 
 ## What this app is
 
-A Signal K server plugin that acts as a **chart provider** for Freeboard-SK,
-serving NOAA bathymetric "hillshade" raster tiles. It is a **caching proxy**:
+A Signal K chart-provider plugin that serves three NOAA underwater-relief charts
+to Freeboard-SK as a **caching proxy**: serve from an MBTiles cache; on a miss,
+fetch the tile from NOAA, (optionally) mask out land, cache it, serve it.
 
-```
-Freeboard ──GET {z}/{x}/{y}──▶ plugin tile route
-                                  │ hit  → serve PNG from MBTiles
-                                  │ empty→ 404 (negative-cached)
-                                  │ miss → NOAA exportImage → store → serve
-                                  ▼
-                         noaa-sonar.mbtiles  (SQLite)  +  .progress (sidecar)
-                                  ▲
-                         tools/noaa_sonar_to_mbtiles.py  (optional bulk pre-fill)
-```
+It is intentionally **purpose-built, not generic**: the three sources are
+hard-coded and there is essentially one user setting (`fetchOnMiss`).
 
-The NOAA source is an **ArcGIS ImageServer with no tile cache**. We synthesize
-XYZ tiles by calling `exportImage` with the tile's web-mercator bounding box.
+## The three charts (src/charts.ts)
+
+| id | source kind | mask | tiles |
+|---|---|---|---|
+| `noaa-sonar` | `exportimage` (ArcGIS ImageServer) | no | 256px direct |
+| `bluetopo-relief` | `wmts` (GeoServer GWC) | yes | 512px native → 4×256 |
+| `bluetopo-bathymetry` | `wmts` (GeoServer GWC) | yes | 512px native → 4×256 |
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `src/index.ts` | Plugin entry: config schema, route + resource-provider registration, tile request handler. |
-| `src/cache.ts` | `TileCache` — better-sqlite3 read/write of the MBTiles file and the `.progress` sidecar. |
-| `src/source.ts` | `NoaaSource` — builds the `exportImage` URL, fetches, classifies data/empty/error. |
-| `src/tiles.ts` | XYZ ⇄ EPSG:3857 math and the XYZ ⇄ TMS row flip. |
-| `src/validate.ts` | Tile-coordinate validation for the HTTP route. |
-| `tools/noaa-sonar-to-mbtiles.js` | Standalone Node bulk builder (quadtree, resumable). |
-| `plugin/` | TypeScript build output (gitignored; produced by `tsc` / `npm run build`). |
+| `src/index.ts` | Plugin entry: chart/route/provider registration, per-miss producers, dispatch. |
+| `src/charts.ts` | Hard-coded `ChartDef[]` (URLs, layers, mask flag, zoom ranges). |
+| `src/source.ts` | Upstream fetch: `fetchExportImage`, `fetchWmts`, `isFullyTransparent` (all via `sharp`). |
+| `src/cache.ts` | `TileCache`: better-sqlite3 read/write of one chart's `.mbtiles` + `.progress`. |
+| `src/landmask.ts` | `LandMask`: query land R*Tree, emit an SVG of land in pixel space. |
+| `src/landbuild.ts` | One-time builder: download OSM land polygons → `land.sqlite` R*Tree. |
+| `src/tiles.ts` | XYZ↔EPSG:3857 math, XYZ↔TMS row flip. |
+| `src/validate.ts` | Tile-coordinate validation. |
+| `tools/noaa-sonar-to-mbtiles.js` | Bulk pre-fill for the sonar chart (quadtree, resumable). |
+| `tools/build-land-db.js` | Standalone land.sqlite builder. |
+| `plugin/` | TS build output (gitignored). |
 
-## The chart-provider contract (Signal K / Freeboard)
+## Chart-provider contract (Signal K / Freeboard)
 
-- **v2**: `app.registerResourceProvider({ type: 'charts', methods: {...} })`.
-  `listResources()` returns `{ [id]: chart }`; `getResource(id)` returns one;
-  `setResource`/`deleteResource` reject (read-only provider).
-- **v1**: plain routes `GET /signalk/v1/api/resources/charts[/:id]`.
-- A chart object is `type: 'tilelayer'` with `format: 'png'`, `bounds`,
-  `minzoom`, `maxzoom`, and a **tile URL template**:
-  - v2 field `url`, v1 field `tilemapUrl`, both = `…/chart-tiles/<id>/{z}/{x}/{y}`.
-- Freeboard expands `{z}/{x}/{y}` (XYZ, y from the top) and hits our route.
+- v2: `app.registerResourceProvider({ type:'charts', methods })` — `listResources`
+  returns all three; `getResource(id)` one; set/delete reject.
+- v1: routes `GET /signalk/v1/api/resources/charts[/:id]`.
+- Each chart is `type:'tilelayer'`, `format:'png'`, with a `{z}/{x}/{y}` URL
+  template (`url` for v2 / `tilemapUrl` for v1) →
+  `GET /signalk/noaa-sonar/chart-tiles/:identifier/:z/:x/:y`.
+- Advertised `bounds` are worldwide (the cache may grow anywhere); per-tile 404s
+  mark the gaps.
 
-This mirrors `@signalk/charts-plugin` (which serves MBTiles over a `{z}/{x}/{y}`
-route) more than `signalk-pmtiles-plugin` (which serves the whole `.pmtiles` file
-for client-side range reads). The latter was the original reference but does not
-fit on-demand fetching.
+## Tile request flow (per chart)
 
-## Core invariants — DO NOT BREAK
+1. Validate `z/x/y`. Cache **hit** (in `tiles`) → serve.
+2. **Known-empty** (in `.progress` `visited`, not in `tiles`) → 404, no refetch.
+3. `fetchOnMiss` off → 404.
+4. Miss → producer:
+   - **exportImage**: fetch one 256px tile; empty → `markEmpty`; else store+serve.
+   - **wmts**: fetch the **parent 512px** tile `(z-1, x>>1, y>>1)`; mask land
+     (if ready); split into the **four 256px children** at `z`; store/`markEmpty`
+     each; serve the requested one. One upstream fetch fills all four siblings.
 
-1. **Two files, two meanings, shared with the bulk tool.**
-   - `noaa-sonar.mbtiles` table `tiles(zoom_level, tile_column, tile_row,
-     tile_data)` holds **DATA tiles only** (never a fully-transparent tile).
-   - `noaa-sonar.mbtiles.progress` table `visited(z, x, y)` records **every tile
-     that has been resolved**, data *or* empty.
-   - Therefore a tile is: **served** if in `tiles`; **known-empty → 404** if in
-     `visited` but not `tiles`; **unknown → fetch** otherwise.
-   - *Why it matters:* the bulk tool walks a quadtree and treats "present
-     in `tiles`" as "has data, descend into children." If the plugin ever stored
-     a transparent tile in `tiles`, a later bulk run would recurse into empty
-     ocean and explode the tile count. Hence `source.ts` checks the alpha channel
-     and the plugin calls `markEmpty()` (visited-only) for transparent results.
+## Invariants — DO NOT BREAK
 
-2. **Row convention.** MBTiles stores **TMS** rows (origin bottom-left); XYZ/
-   Freeboard use top-left. `tiles.ts#flipRow` converts (`2^z - 1 - y`). `tiles`
-   is keyed by TMS row; `visited` is keyed by **XYZ** `y` (matching the bulk
-   tool). Keep these consistent across both tools.
+1. **`tiles` = data only; `.progress` `visited` = every resolved tile** (data or
+   empty), keyed XYZ. This is shared with `tools/noaa-sonar-to-mbtiles.js`, whose
+   quadtree treats "present in `tiles`" as "has data, descend." Never store a
+   fully-transparent tile in `tiles` (that includes land-masked-to-empty tiles —
+   they are `markEmpty` only).
+2. **Row convention**: `tiles` stores TMS rows (`flipRow = 2^z-1-y`); `visited`
+   uses XYZ `y`. Keep both tools consistent.
+3. **Tile geometry must match** between `src/tiles.ts` and
+   `tools/noaa-sonar-to-mbtiles.js` (verified by exact bbox comparison).
+4. **All output tiles are 256px.** BlueTopo's native gridset is 512px with the
+   *same* tile indexing as XYZ (2^z tiles/side), so its level `z` 512px tile is
+   split into the four XYZ-256 children at `z+1` — preserving native detail under
+   the standard 256 assumption. Don't emit mixed tile sizes.
 
-3. **Tile geometry must match the bulk tool exactly.** Both writers must agree
-   on each tile's bbox or they'd cache misaligned imagery. `src/tiles.ts` and
-   `tools/noaa-sonar-to-mbtiles.js` use identical math; verified by an exact
-   bbox comparison. If you change one, change both and re-verify.
+## Land masking
 
-## Implementation notes / gotchas
+- **Data**: OSM "land polygons", **split** (small pieces, so per-tile we touch
+  few/short polygons) and in **EPSG:3857** (our tile CRS — no reprojection).
+  `landbuild.ts` downloads + stores each exterior ring as a packed Float64 blob
+  in `land(id, coords)`, indexed by `land_rtree(id, minx,maxx,miny,maxy)`.
+- **Apply**: `LandMask.maskSvg(tileBBox3857, sizePx)` bbox-queries the R*Tree,
+  projects ring coords to pixels, returns an SVG (land filled white) or `null`
+  (no land). `index.ts` composites it with `sharp` blend **`dest-out`** → land
+  becomes transparent. Masking is done at 512 **before** the 4-way split.
+- **Async/ready**: the land DB builds in the background on first run; until
+  `landMask.ready`, BlueTopo tiles are served **unmasked** (acceptable; they get
+  re-masked once tiles are re-requested after a cache miss — note already-cached
+  unmasked tiles won't be re-masked, so ideally let the DB finish before heavy
+  browsing, or pre-build with `tools/build-land-db.js`).
 
-- **exportImage params:** `bbox=<3857>&bboxSR=3857&imageSR=3857&size=256,256&`
-  `format=png32&transparent=true&f=image`. `png32` (not `png`) is required to get
-  an **RGBA** image so no-data areas are truly transparent.
-- **ArcGIS error responses:** even with `f=image`, failures return a JSON body.
-  `source.ts` checks `content-type` includes `image` and HTTP ok; otherwise it
-  treats the response as an error and retries. An `error` result is **not**
-  marked visited, so it will be retried on a later request.
-- **Empty detection:** decode with `pngjs` and scan the alpha bytes; all-zero ⇒
-  empty. 256×256 is cheap.
-- **Route registration once:** routes are registered with `app.get(...)` a single
-  time per process (guarded), since SK calls `stop()`/`start()` on config change
-  without re-creating the plugin. Handlers read the latest `cache`/`props` via
-  closure.
-- **better-sqlite3 is synchronous** — fine on the request path (lookups are
-  microseconds) and simpler than async SQLite. WAL mode is enabled.
-- **Bounds default = worldwide.** The provider advertises where it is *willing to
-  fetch*, not what is cached, so the cache can grow anywhere. Constrain via config
-  to limit empty open-ocean fetches.
+## Performance (measured on a Pi 5, per 512px tile)
 
-## Build, test, verify
+decode+encode ≈ 12 ms · +mask ≈ 23–34 ms · +retile to 4×256 ≈ 42 ms. Paid once
+per tile, then it's a pure cache hit. Network fetch dominates first-view latency.
 
-- Build: `npm run build` (or `npm install`, which runs `tsc` via `prepare`).
-- There is no bundled test runner. The behavior was verified with a fake-`app`
-  harness that drives the compiled plugin through: chart metadata, cache-hit,
-  fetch-on-miss (data + empty + negative cache), and cache-only mode. If you
-  change request handling, re-create that style of check (construct a fake
-  `app` with `get`/`registerResourceProvider`/`config`, call `plugin.start`,
-  invoke the route handler with mock `req`/`res`).
-- After any change to tile math, re-verify parity with `tools/`:
-  identical `(x, y)` and bbox for the same lon/lat/zoom.
+## Build & test
 
-## Extending
+- Build: `npm run build` (or `npm install` → `prepare` runs `tsc`).
+- No bundled runner; behavior was validated with fake-`app` harnesses covering:
+  mask alignment (synthetic land polygon erases exactly the right pixels), 3-chart
+  metadata, sonar fetch (256, unmasked), BlueTopo retile+mask+sibling-caching,
+  negative caching, and cache-only mode. Recreate that style of check after
+  changes to request handling or tile math.
 
-- **Different NOAA layer / another ImageServer:** change `serviceUrl` (config) —
-  any ArcGIS ImageServer supporting `exportImage` works. If it has a real tile
-  cache, prefer that endpoint instead of `exportImage`.
-- **Multiple charts:** today there is one chart id (`noaa-sonar`). To support
-  several, key providers/caches by id and generalize the route's `:identifier`
-  handling (it currently must equal the single id).
-- **Don't add a PMTiles write path.** PMTiles is write-once/read-optimized; it is
-  unsuitable as a live, incrementally-written cache. Keep MBTiles as the cache
-  and convert to PMTiles offline if a portable archive is wanted.
+## Extending / caution
+
+- New WMTS-style chart: add a `ChartDef` with a `wmts` source. ImageServer with a
+  real tile cache → prefer that over `exportImage`.
+- Don't add a PMTiles **write** path — PMTiles is write-once; keep MBTiles as the
+  live cache and convert offline if needed.
+- Keep it purpose-built; resist turning it into a configurable generic proxy
+  (cache files get large, and config is what we deliberately removed).
 
 ## Safety
 
-Not for navigation. Tile coordinates are integer-validated and used only as
-SQLite bind parameters and numeric bbox math (no path building, no string
-interpolation into queries or URLs beyond numbers), so the route is not a path-
-traversal or injection vector. `serviceUrl` is admin-configured (trusted).
+Not for navigation. Tile coords are integer-validated and used only as SQLite
+bind params and numeric bbox math — no path/string injection. All upstream URLs
+are hard-coded.
