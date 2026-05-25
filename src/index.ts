@@ -253,30 +253,27 @@ module.exports = (app: ChartProviderApp): Plugin => {
   }
 
   // Land DB: build it (download) in the background if missing, then open it.
+  // Status reads "Building land.sql..." until the land data is ready, then
+  // "Started" once everything is truly serving.
   const initLandMask = async () => {
     landMask = new LandMask(landDbPath)
     if (!landMask.exists()) {
-      app.setPluginStatus('Downloading land data (one-time) for masking...')
+      app.setPluginStatus('Building land.sql...')
       try {
         await buildLandDb(landDbPath, (m) => app.debug(m))
       } catch (e) {
-        app.error(`noaa-sonar: land data build failed: ${(e as Error).message}`)
+        app.setPluginError(`land data build failed: ${(e as Error).message}`)
         return
       }
     }
     try {
       landMask.open()
       app.debug('noaa-sonar: land mask ready')
-      app.setPluginStatus(statusLine())
+      app.setPluginStatus('Started')
     } catch (e) {
-      app.error(`noaa-sonar: opening land db failed: ${(e as Error).message}`)
+      app.setPluginError(`opening land db failed: ${(e as Error).message}`)
     }
   }
-
-  const statusLine = () =>
-    `Serving ${CHARTS.length} charts` +
-    (props.fetchOnMiss ? ', fetch-on-miss ON' : ', cache-only') +
-    (landMask?.ready ? ', land mask ready' : ', land mask loading…')
 
   const plugin: Plugin = {
     id: 'noaa-sonar-chart-provider',
@@ -294,8 +291,8 @@ module.exports = (app: ChartProviderApp): Plugin => {
         routesRegistered = true
       }
       registerAsProvider()
-      app.setPluginStatus(statusLine())
-      // Kick off land-data init without blocking startup.
+      // initLandMask sets status: "Building land.sql..." while preparing the
+      // land data, then "Started" once truly ready.
       void initLandMask()
     },
     stop: () => {
