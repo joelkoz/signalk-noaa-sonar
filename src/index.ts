@@ -7,7 +7,6 @@ import {
   ResourceProviderRegistry
 } from '@signalk/server-api'
 import { CHARTS, ChartDef, cacheBaseName } from './charts'
-import { sqliteAvailable, sqliteLoadError, packageRoot } from './db'
 import { TileCache } from './cache'
 import { LandMask } from './landmask'
 import { buildLandDb } from './landbuild'
@@ -59,20 +58,10 @@ module.exports = (app: ChartProviderApp): Plugin => {
 
   const byId = (id: string): ChartDef | undefined => CHARTS.find((c) => c.id === id)
 
-  // Dependency status shown at the top of the plugin config screen.
-  const dependencyStatus = () =>
-    sqliteAvailable()
-      ? '✅ better-sqlite3 is installed.'
-      : '❌ better-sqlite3 is NOT installed — charts are disabled. ' +
-        `From a terminal run:  cd ${packageRoot()} && npm install better-sqlite3  ` +
-        'then restart Signal K. (The Signal K App Store installs plugins with ' +
-        "--ignore-scripts, which skips better-sqlite3's native build.)"
-
   const buildSchema = () => ({
     title: 'NOAA Sonar Charts',
     description:
-      dependencyStatus() +
-      '\n\nAdds NOAA sonar and BlueTopo underwater-relief charts. Tiles are cached under ' +
+      'Adds NOAA sonar and BlueTopo underwater-relief charts. Tiles are cached under ' +
       `"${chartsDir}". Land masking for the BlueTopo charts needs a one-time land-data download.`,
     type: 'object',
     properties: {
@@ -254,22 +243,23 @@ module.exports = (app: ChartProviderApp): Plugin => {
     schema: () => buildSchema(),
     start: (settings: Partial<Config>) => {
       props = { fetchOnMiss: true, ...settings }
-      if (!sqliteAvailable()) {
+      const nextCaches = new Map<string, TileCache>()
+      try {
+        fs.mkdirSync(chartsDir, { recursive: true })
+        for (const c of CHARTS) {
+          nextCaches.set(
+            c.id,
+            new TileCache(path.join(chartsDir, `${cacheBaseName(c.id)}.mbtiles`))
+          )
+        }
+      } catch (e) {
+        for (const c of nextCaches.values()) c.close()
         app.setPluginError(
-          'better-sqlite3 is not installed, so charts are disabled. Install it: ' +
-            `cd ${packageRoot()} && npm install better-sqlite3, then restart Signal K. ` +
-            `(load error: ${sqliteLoadError()})`
+          `NOAA Sonar Charts disabled: opening SQLite caches failed: ${(e as Error).message}`
         )
         return
       }
-      fs.mkdirSync(chartsDir, { recursive: true })
-      caches = new Map()
-      for (const c of CHARTS) {
-        caches.set(
-          c.id,
-          new TileCache(path.join(chartsDir, `${cacheBaseName(c.id)}.mbtiles`))
-        )
-      }
+      caches = nextCaches
       if (!routesRegistered) {
         registerRoutes()
         routesRegistered = true

@@ -96,8 +96,8 @@ export async function buildLandDb(dbPath: string, log: Log): Promise<void> {
     const tmpDb = dbPath + '.building'
     if (fs.existsSync(tmpDb)) fs.rmSync(tmpDb)
     const db = openDatabase(tmpDb)
-    db.pragma('journal_mode = WAL')
-    db.pragma('synchronous = OFF')
+    db.exec('PRAGMA journal_mode = WAL')
+    db.exec('PRAGMA synchronous = OFF')
     db.exec(
       `CREATE TABLE land (id INTEGER PRIMARY KEY, coords BLOB);
        CREATE VIRTUAL TABLE land_rtree USING rtree(id, minx, maxx, miny, maxy);`

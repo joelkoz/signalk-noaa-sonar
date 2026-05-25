@@ -19,8 +19,7 @@ cover the land features of your base chart. If you have any difficulties, change
 ## Requirements
 
 - Signal K server with Freeboard-SK v2 or later.
-- Node.js ≥ 18.
-- Initial manual install to get `better-sqlite3` to install
+- Node.js ≥ 22.5.0.
 
 ## Installation
 
@@ -32,13 +31,7 @@ npm install signalk-noaa-sonar-charts
 ```
 
 Then **restart Signal K** and enable the plugin under **Server → Plugin Config →
-"NOAA Sonar Chart Provider"**. The config screen should show
-**✅ better-sqlite3 is installed**, and the three charts appear in Freeboard's
-chart list.
-
-> **If the config screen shows `❌ better-sqlite3 is NOT installed`** — this can
-> happen if the plugin was added from the Signal K App Store — just run the
-> install command above and restart Signal K. That completes the one-time setup.
+"NOAA Sonar Chart Provider"**. The three charts appear in Freeboard's chart list.
 
 ## Configuration
 

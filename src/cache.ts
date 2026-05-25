@@ -1,5 +1,5 @@
 /**
- * MBTiles read/write cache backed by better-sqlite3, sharing one file (and one
+ * MBTiles read/write cache backed by SQLite, sharing one file (and one
  * `.progress` sidecar) with the Python bulk tool. The two agree on conventions:
  *
  *   - `tiles(zoom_level, tile_column, tile_row, tile_data)` holds DATA tiles
@@ -11,23 +11,22 @@
  * `tiles`; otherwise unknown (fetch it).
  */
 
-import type Database from 'better-sqlite3'
-import { openDatabase } from './db'
+import { DatabaseHandle, StatementHandle, openDatabase } from './db'
 import { flipRow } from './tiles'
 
 export class TileCache {
-  private db: Database.Database
-  private progress: Database.Database
+  private db: DatabaseHandle
+  private progress: DatabaseHandle
 
-  private selTile: Database.Statement
-  private selVisited: Database.Statement
-  private insTile: Database.Statement
-  private insVisited: Database.Statement
+  private selTile: StatementHandle
+  private selVisited: StatementHandle
+  private insTile: StatementHandle
+  private insVisited: StatementHandle
 
   constructor(mbtilesPath: string) {
     this.db = openDatabase(mbtilesPath)
-    this.db.pragma('journal_mode = WAL')
-    this.db.pragma('synchronous = NORMAL')
+    this.db.exec('PRAGMA journal_mode = WAL')
+    this.db.exec('PRAGMA synchronous = NORMAL')
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS metadata (name text, value text);
        CREATE UNIQUE INDEX IF NOT EXISTS name ON metadata (name);
@@ -38,8 +37,8 @@ export class TileCache {
     )
 
     this.progress = openDatabase(mbtilesPath + '.progress')
-    this.progress.pragma('journal_mode = WAL')
-    this.progress.pragma('synchronous = NORMAL')
+    this.progress.exec('PRAGMA journal_mode = WAL')
+    this.progress.exec('PRAGMA synchronous = NORMAL')
     this.progress.exec(
       `CREATE TABLE IF NOT EXISTS visited
          (z int, x int, y int, PRIMARY KEY (z, x, y));`
@@ -61,8 +60,10 @@ export class TileCache {
 
   /** Cached DATA tile for XYZ (z, x, y), or null. */
   getTile(z: number, x: number, y: number): Buffer | null {
-    const row = this.selTile.get(z, x, flipRow(y, z)) as { d: Buffer } | undefined
-    return row ? row.d : null
+    const row = this.selTile.get(z, x, flipRow(y, z)) as
+      | { d: Uint8Array }
+      | undefined
+    return row ? Buffer.from(row.d) : null
   }
 
   /** True if this tile was already resolved (data or empty). */

@@ -9,13 +9,12 @@
  */
 
 import fs from 'fs'
-import type Database from 'better-sqlite3'
-import { openDatabase } from './db'
+import { DatabaseHandle, StatementHandle, openDatabase } from './db'
 import { BBox3857 } from './tiles'
 
 export class LandMask {
-  private db: Database.Database | null = null
-  private q: Database.Statement | null = null
+  private db: DatabaseHandle | null = null
+  private q: StatementHandle | null = null
   ready = false
 
   constructor(private dbPath: string) {}
@@ -26,7 +25,7 @@ export class LandMask {
 
   open(): void {
     this.db = openDatabase(this.dbPath, { readonly: true })
-    this.db.pragma('query_only = true')
+    this.db.exec('PRAGMA query_only = true')
     // polygon bbox intersects tile bbox
     this.q = this.db.prepare(
       'SELECT l.coords AS c FROM land_rtree r JOIN land l ON l.id = r.id ' +
@@ -46,7 +45,7 @@ export class LandMask {
       bbox.minX,
       bbox.maxY,
       bbox.minY
-    ) as Array<{ c: Buffer }>
+    ) as Array<{ c: Uint8Array }>
     if (rows.length === 0) return null
 
     const sx = sizePx / (bbox.maxX - bbox.minX)

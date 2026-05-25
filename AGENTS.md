@@ -46,7 +46,7 @@ applies the same factor (`--opacity`, default 0.75).
 | `src/produce.ts` | **Shared producers** (`produceTile`): fetch + mask + opacity + retile + cache. Used by the plugin (per request) **and** the bulk tool. |
 | `src/charts.ts` | Hard-coded `ChartDef[]` + `cacheBaseName()`. |
 | `src/source.ts` | Upstream fetch: `fetchExportImage`, `fetchWmts`, `isFullyTransparent` (all via `sharp`). |
-| `src/cache.ts` | `TileCache`: better-sqlite3 read/write of one chart's `.mbtiles` + `.progress` (incl. `dataTilesAt` for the bulk walk). |
+| `src/cache.ts` | `TileCache`: native `node:sqlite` read/write of one chart's `.mbtiles` + `.progress` (incl. `dataTilesAt` for the bulk walk). |
 | `src/landmask.ts` | `LandMask`: query land R*Tree, emit an SVG of land in pixel space. |
 | `src/landbuild.ts` | One-time builder: download OSM land polygons → `land.sqlite` R*Tree. |
 | `src/tiles.ts` | XYZ↔EPSG:3857 math, XYZ↔TMS row flip. |
@@ -159,23 +159,14 @@ cd ~/.signalk && npm link signalk-noaa-sonar-charts
 
 ## Native dependencies & the App Store
 
+- Minimum runtime is **Node >= 22.5.0** because SQLite access uses Node's native
+  synchronous `node:sqlite` API. All SQLite access goes through `src/db.ts` /
+  `openDatabase()` so this remains the single choke point.
 - The Signal K AppStore installs plugins with `npm install --ignore-scripts`
-  (signalk-server `src/modules.ts`). That skips dependency build/postinstall
-  scripts. Consequences:
-  - **`sharp`** is fine: it ships prebuilt binaries as optional dependencies
-    (`@img/sharp-*`), which need no install script.
-  - **`better-sqlite3`** is NOT fine: its native `.node` binary is fetched by an
-    `install` script, which `--ignore-scripts` skips → the module is present but
-    fails to `require`.
-- `src/db.ts` loads better-sqlite3 **lazily** and catches that failure. When it's
-  unavailable the plugin does not crash: `start()` calls `setPluginError(...)`,
-  the config schema's top line shows `❌ better-sqlite3 is NOT installed …` with
-  the fix (`npm install better-sqlite3` in the package dir), and no charts are
-  registered. When available, the line shows `✅`. All SQLite access goes through
-  `openDatabase()` so this is the single choke point.
-- This keeps broad Node support (no `node:sqlite` requirement). If you ever want
-  zero-native-deps + AppStore-clean out of the box, `node:sqlite` (Node ≥ 23.4,
-  R*Tree verified) is the migration path — but it raises the minimum Node.
+  (signalk-server `src/modules.ts`). Avoid dependencies that need install or
+  postinstall scripts for runtime correctness.
+- `sharp` is fine: it ships prebuilt binaries as optional dependencies
+  (`@img/sharp-*`), which need no install script.
 
 ## Extending / caution
 
