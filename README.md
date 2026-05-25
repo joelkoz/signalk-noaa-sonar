@@ -23,12 +23,7 @@ cover the land features of your base chart. If you have any difficulties, change
 
 ## Installation
 
-Install from your Signal K configuration directory (usually `~/.signalk`):
-
-```bash
-cd ~/.signalk
-npm install signalk-noaa-sonar-charts
-```
+Locate the plugin in the Signal K App Store and install from there. 
 
 Then **restart Signal K** and enable the plugin under **Server → Plugin Config →
 "NOAA Sonar Chart Provider"**. The three charts appear in Freeboard's chart list.
