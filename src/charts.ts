@@ -37,8 +37,8 @@ const BLUETOPO_WMTS = 'https://nowcoast.noaa.gov/geoserver/gwc/service/wmts'
 export const CHARTS: ChartDef[] = [
   {
     id: 'noaa-sonar',
-    name: 'NOAA Sonar',
-    description: 'NOAA bathymetric sonar (BAG hillshade subsets)',
+    name: 'NOAA Hi-Res Sonar',
+    description: 'NOAA high resolution bathymetric sonar (BAG hillshade subsets)',
     source: { kind: 'exportimage', serviceUrl: NOAA_BAG },
     mask: false, // exportImage nodata is already transparent
     minzoom: 1,

@@ -1,7 +1,7 @@
 # signalk-noaa-sonar
 
-Adds **NOAA underwater-relief charts** to [Signal K](https://signalk.org/) /
-Freeboard-SK. It registers three chart layers and serves their tiles from local
+A Signal K chart provider for high resolution underwater relief charts around the
+United States. It registers three chart layers and serves their tiles from local
 MBTiles caches, rendering any missing tile on demand from NOAA and saving it. So
 the charts **work offline** from whatever's cached, and the cache **grows as you
 use it**.
