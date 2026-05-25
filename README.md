@@ -1,10 +1,11 @@
 # signalk-noaa-sonar-charts
 
+![screenshot](noaa-sonar-charts-screenshot.png)
+
 A Signal K chart provider for high resolution underwater relief charts around the
 United States. It adds three chart layers to Freeboard-SK and serves their tiles
-from local caches, fetching any missing tile from NOAA on demand and saving it —
-so the charts **work offline** from whatever you've already viewed, and the cache
-**grows as you use it**.
+from local caches, fetching any missing tile from NOAA on demand and saving it 
+so the charts **work offline** from whatever you've already viewed.
 
 | Chart | Description |
 |---|---|
@@ -12,14 +13,14 @@ so the charts **work offline** from whatever you've already viewed, and the cach
 | **BlueTopo Relief** | Mid resolution underwater relief |
 | **BlueTopo Depth Color** | Colorized depth indicator |
 
-The two BlueTopo layers have **land masked out** (made transparent) so they don't
-cover the land features of your base chart. The three layers are pre-set to stack
-nicely — add them all in Freeboard and leave each layer's opacity at 100%.
+The layers are pre-baked with set opacities so they should play well with other layers with minimal configuration. The two BlueTopo layers have **land masked out** (made transparent) so they don't
+cover the land features of your base chart. If you have any difficulties, change the stack order. The HiRes relief is best when its the top layer.
 
 ## Requirements
 
 - Signal K server with Freeboard-SK v2 or later.
 - Node.js ≥ 18.
+- Initial manual install to get `better-sqlite3` to install
 
 ## Installation
 
