@@ -49,7 +49,11 @@ module.exports = (app: ChartProviderApp): Plugin => {
   let providerRegistered = false
 
   // Plugin-owned data dir (<configPath>/plugin-config-data/<pluginId>).
-  const dataDir = app.getDataDirPath()
+  const getDataDirPath = (app as unknown as { getDataDirPath?: () => string }).getDataDirPath
+  const dataDir =
+    typeof getDataDirPath === 'function'
+      ? getDataDirPath.call(app)
+      : path.join(app.config.configPath, 'plugin-config-data', 'noaa-sonar-chart-provider')
   const chartsDir = path.join(dataDir, 'charts')
   const landDbPath = path.join(dataDir, 'land.sqlite')
 

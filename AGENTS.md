@@ -65,12 +65,13 @@ applies the same factor (`--opacity`, default 0.75).
   `GET /signalk/noaa-sonar/chart-tiles/:identifier/:z/:x/:y`.
 - Advertised `bounds` are worldwide (the cache may grow anywhere); per-tile 404s
   mark the gaps.
-- Data dir = `app.getDataDirPath()` = `<config>/plugin-config-data/<pluginId>`
-  (pluginId `noaa-sonar-chart-provider`); caches go in `<dataDir>/charts/`, land
-  data in `<dataDir>/land.sqlite`. This is outside `<config>/charts` on purpose:
-  the generic `@signalk/charts-plugin` scans `<config>/charts` and would publish
-  the same chart ids with `/signalk/chart-tiles/...`, making Freeboard hit the
-  wrong endpoint. The bulk tool can't call `getDataDirPath()` (no `app`), so it
+- Data dir = `app.getDataDirPath()` when available, otherwise fallback to
+  `<config>/plugin-config-data/<pluginId>` (pluginId
+  `noaa-sonar-chart-provider`); caches go in `<dataDir>/charts/`, land data in
+  `<dataDir>/land.sqlite`. This is outside `<config>/charts` on purpose: the
+  generic `@signalk/charts-plugin` scans `<config>/charts` and would publish the
+  same chart ids with `/signalk/chart-tiles/...`, making Freeboard hit the wrong
+  endpoint. The bulk tool can't call `getDataDirPath()` (no `app`), so it
   reconstructs the same path for its `--dir` default (override with `--dir`).
 
 ## Tile request flow (per chart)
