@@ -35,7 +35,7 @@
 'use strict'
 
 const Database = require('better-sqlite3')
-const { PNG } = require('pngjs')
+const sharp = require('sharp')
 
 // --- Defaults --------------------------------------------------------------
 const DEFAULT_SERVICE =
@@ -199,7 +199,7 @@ async function fetchTile(service, z, x, y) {
         // ArcGIS returns a JSON error body even with f=image.
         throw new Error(`HTTP ${resp.status} ${ctype}: ${buf.toString('utf8').slice(0, 160)}`)
       }
-      return isFullyTransparent(buf) ? { status: 'empty' } : { status: 'data', body: buf }
+      return (await isFullyTransparent(buf)) ? { status: 'empty' } : { status: 'data', body: buf }
     } catch (e) {
       lastErr = e
       await delay(1000 + attempt * 1500)
@@ -209,14 +209,11 @@ async function fetchTile(service, z, x, y) {
   return { status: 'error' }
 }
 
-/** True if every pixel's alpha is 0 (no survey data covers this tile). */
-function isFullyTransparent(buf) {
-  const png = PNG.sync.read(buf) // normalizes to 8-bit RGBA
-  const data = png.data
-  for (let i = 3; i < data.length; i += 4) {
-    if (data[i] !== 0) return false
-  }
-  return true
+/** True if every alpha sample is 0 (no survey data covers this tile). */
+async function isFullyTransparent(buf) {
+  const stats = await sharp(buf).ensureAlpha().stats()
+  const alpha = stats.channels[stats.channels.length - 1]
+  return alpha.max === 0
 }
 
 function delay(ms) {

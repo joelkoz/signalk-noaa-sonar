@@ -11,7 +11,8 @@
  * `tiles`; otherwise unknown (fetch it).
  */
 
-import Database from 'better-sqlite3'
+import type Database from 'better-sqlite3'
+import { openDatabase } from './db'
 import { flipRow } from './tiles'
 
 export class TileCache {
@@ -24,7 +25,7 @@ export class TileCache {
   private insVisited: Database.Statement
 
   constructor(mbtilesPath: string) {
-    this.db = new Database(mbtilesPath)
+    this.db = openDatabase(mbtilesPath)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('synchronous = NORMAL')
     this.db.exec(
@@ -36,7 +37,7 @@ export class TileCache {
          ON tiles (zoom_level, tile_column, tile_row);`
     )
 
-    this.progress = new Database(mbtilesPath + '.progress')
+    this.progress = openDatabase(mbtilesPath + '.progress')
     this.progress.pragma('journal_mode = WAL')
     this.progress.pragma('synchronous = NORMAL')
     this.progress.exec(

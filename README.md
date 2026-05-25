@@ -1,4 +1,4 @@
-# signalk-noaa-sonar
+# signalk-noaa-sonar-charts
 
 A Signal K chart provider for high resolution underwater relief charts around the
 United States. It registers three chart layers and serves their tiles from local
@@ -39,16 +39,26 @@ configure, easier for a non-technical user.
 
 ## Install
 
+**From the Signal K App Store** (recommended): open the Signal K server admin UI →
+**Appstore → Available**, search for *NOAA Sonar Charts*, install, and restart.
+
+**From source** (development):
+
 ```bash
-cd signalk-noaa-sonar
+cd signalk-noaa-sonar-charts
 npm install        # builds via the `prepare` hook (tsc -> plugin/)
 npm link
 cd ~/.signalk
-npm link signalk-noaa-sonar
+npm link signalk-noaa-sonar-charts
 ```
 
-Restart Signal K → **Server → Plugin Config → "NOAA Sonar Chart Provider"** →
-enable. The three charts then appear in Freeboard's chart list.
+Then **Server → Plugin Config → "NOAA Sonar Chart Provider"** → enable. The three
+charts then appear in Freeboard's chart list.
+
+> **If the config screen shows `❌ better-sqlite3 is NOT installed`** (the App
+> Store installs with `--ignore-scripts`, which skips its native build): open a
+> terminal in the plugin directory and run `npm install better-sqlite3`, then
+> restart Signal K. The plugin reports this state instead of crashing.
 
 ## Configuration
 

@@ -9,7 +9,8 @@
  */
 
 import fs from 'fs'
-import Database from 'better-sqlite3'
+import type Database from 'better-sqlite3'
+import { openDatabase } from './db'
 import { BBox3857 } from './tiles'
 
 export class LandMask {
@@ -24,7 +25,7 @@ export class LandMask {
   }
 
   open(): void {
-    this.db = new Database(this.dbPath, { readonly: true })
+    this.db = openDatabase(this.dbPath, { readonly: true })
     this.db.pragma('query_only = true')
     // polygon bbox intersects tile bbox
     this.q = this.db.prepare(

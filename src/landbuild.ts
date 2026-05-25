@@ -15,7 +15,7 @@ import path from 'path'
 import os from 'os'
 import { Readable } from 'stream'
 import { finished } from 'stream/promises'
-import Database from 'better-sqlite3'
+import { openDatabase } from './db'
 import AdmZip from 'adm-zip'
 import { openShp } from 'shapefile'
 
@@ -95,7 +95,7 @@ export async function buildLandDb(dbPath: string, log: Log): Promise<void> {
     log('Building land index (this can take a few minutes)...')
     const tmpDb = dbPath + '.building'
     if (fs.existsSync(tmpDb)) fs.rmSync(tmpDb)
-    const db = new Database(tmpDb)
+    const db = openDatabase(tmpDb)
     db.pragma('journal_mode = WAL')
     db.pragma('synchronous = OFF')
     db.exec(

@@ -109,6 +109,26 @@ per tile, then it's a pure cache hit. Network fetch dominates first-view latency
   negative caching, and cache-only mode. Recreate that style of check after
   changes to request handling or tile math.
 
+## Native dependencies & the App Store
+
+- The Signal K AppStore installs plugins with `npm install --ignore-scripts`
+  (signalk-server `src/modules.ts`). That skips dependency build/postinstall
+  scripts. Consequences:
+  - **`sharp`** is fine: it ships prebuilt binaries as optional dependencies
+    (`@img/sharp-*`), which need no install script.
+  - **`better-sqlite3`** is NOT fine: its native `.node` binary is fetched by an
+    `install` script, which `--ignore-scripts` skips → the module is present but
+    fails to `require`.
+- `src/db.ts` loads better-sqlite3 **lazily** and catches that failure. When it's
+  unavailable the plugin does not crash: `start()` calls `setPluginError(...)`,
+  the config schema's top line shows `❌ better-sqlite3 is NOT installed …` with
+  the fix (`npm install better-sqlite3` in the package dir), and no charts are
+  registered. When available, the line shows `✅`. All SQLite access goes through
+  `openDatabase()` so this is the single choke point.
+- This keeps broad Node support (no `node:sqlite` requirement). If you ever want
+  zero-native-deps + AppStore-clean out of the box, `node:sqlite` (Node ≥ 23.4,
+  R*Tree verified) is the migration path — but it raises the minimum Node.
+
 ## Extending / caution
 
 - New WMTS-style chart: add a `ChartDef` with a `wmts` source. ImageServer with a

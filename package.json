@@ -1,7 +1,7 @@
 {
-  "name": "signalk-noaa-sonar",
+  "name": "signalk-noaa-sonar-charts",
   "version": "0.2.0",
-  "description": "NOAA underwater relief charts for Signal K / Freeboard: serves NOAA sonar (BAG hillshade) and BlueTopo bathymetry/relief tiles from an MBTiles cache, rendering missing tiles on demand and masking out land.",
+  "description": "NOAA high-resolution underwater relief charts (NOAA sonar + BlueTopo bathymetry/relief) for Signal K / Freeboard. Renders missing tiles on demand into an MBTiles cache and masks out land.",
   "main": "plugin/index.js",
   "scripts": {
     "build": "tsc",
@@ -11,8 +11,8 @@
   },
   "keywords": [
     "signalk-node-server-plugin",
-    "signalk",
     "signalk-category-chart-plotters",
+    "signalk",
     "chart",
     "noaa",
     "bluetopo",
@@ -20,8 +20,27 @@
     "sonar",
     "mbtiles"
   ],
+  "signalk": {
+    "displayName": "NOAA Sonar Charts"
+  },
+  "files": [
+    "plugin",
+    "tools",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "LICENSE"
+  ],
   "author": "Joel Kozikowski",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joelkoz/signalk-noaa-sonar-charts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/joelkoz/signalk-noaa-sonar-charts/issues"
+  },
+  "homepage": "https://github.com/joelkoz/signalk-noaa-sonar-charts#readme",
   "engines": {
     "node": ">=18"
   },
