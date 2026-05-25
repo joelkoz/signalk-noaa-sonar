@@ -56,7 +56,9 @@ enable. The three charts then appear in Freeboard's chart list.
 |---|---|---|
 | Download missing tiles when online | `true` | Turn **off** for cellular/offline (serve only cached tiles). |
 
-Caches live in `<signalk-config>/charts/<chart-id>.mbtiles`.
+Caches live in `<signalk-config>/noaa-sonar-data/charts/<chart-id>.mbtiles`.
+Keeping them outside `<signalk-config>/charts` avoids having the generic Signal K
+charts plugin publish the same chart identifiers with its static tile route.
 
 ## Land data (one-time)
 
@@ -77,7 +79,8 @@ node tools/build-land-db.js land.sqlite
 box, using a quadtree that skips empty ocean. Resumable and additive.
 
 ```bash
-node tools/noaa-sonar-to-mbtiles.js --out ~/.signalk/charts/noaa-sonar.mbtiles \
+node tools/noaa-sonar-to-mbtiles.js \
+  --out ~/.signalk/noaa-sonar-data/charts/noaa-sonar.mbtiles \
   --bbox -82.0 24.4 -80.05 25.6 --min-zoom 10 --max-zoom 18
 ```
 

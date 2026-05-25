@@ -47,8 +47,8 @@ module.exports = (app: ChartProviderApp): Plugin => {
   let routesRegistered = false
   let providerRegistered = false
 
-  const chartsDir = path.join(app.config.configPath, 'charts')
   const dataDir = path.join(app.config.configPath, 'noaa-sonar-data')
+  const chartsDir = path.join(dataDir, 'charts')
   const landDbPath = path.join(dataDir, 'land.sqlite')
 
   const byId = (id: string): ChartDef | undefined => CHARTS.find((c) => c.id === id)

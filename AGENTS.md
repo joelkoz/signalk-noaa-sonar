@@ -47,6 +47,10 @@ hard-coded and there is essentially one user setting (`fetchOnMiss`).
   `GET /signalk/noaa-sonar/chart-tiles/:identifier/:z/:x/:y`.
 - Advertised `bounds` are worldwide (the cache may grow anywhere); per-tile 404s
   mark the gaps.
+- Keep this plugin's live MBTiles caches outside `<config>/charts`. The generic
+  `@signalk/charts-plugin` scans that directory and can publish the same chart
+  identifiers with `/signalk/chart-tiles/...`, causing Freeboard to request the
+  wrong endpoint.
 
 ## Tile request flow (per chart)
 
