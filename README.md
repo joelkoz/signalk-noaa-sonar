@@ -2,8 +2,8 @@
 
 ![screenshot](noaa-sonar-charts-screenshot.png)
 
-A Signal K chart provider for high resolution underwater relief charts around the
-United States. It adds three chart layers to Freeboard-SK and serves their tiles
+A Signal K chart provider for high resolution underwater relief charts around the eastern
+United States and parts of the Caribbean. It adds three chart layers to Freeboard-SK and serves their tiles
 from local caches, fetching any missing tile from NOAA on demand and saving it 
 so the charts **work offline** from whatever you've already viewed.
 
@@ -15,6 +15,9 @@ so the charts **work offline** from whatever you've already viewed.
 
 The layers are pre-baked with set opacities so they should play well with other layers with minimal configuration. The two BlueTopo layers have **land masked out** (made transparent) so they don't
 cover the land features of your base chart. If you have any difficulties, change the stack order. The HiRes relief is best when its the top layer.
+
+## Coverage area
+![coverage](bluetopo-coverage.png)
 
 ## Requirements
 
