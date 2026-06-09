@@ -24,15 +24,20 @@
     "mbtiles"
   ],
   "signalk": {
-    "displayName": "NOAA Sonar Charts"
+    "displayName": "NOAA Sonar Charts",
+    "screenshots": [
+      "./docs/screenshots/noaa-sonar-charts-screenshot.jpg"
+    ]
   },
   "files": [
     "plugin",
     "tools",
     "README.md",
+    "CHANGELOG.md",
     "AGENTS.md",
     "CLAUDE.md",
-    "LICENSE"
+    "LICENSE",
+    "docs/screenshots"
   ],
   "author": "Joel Kozikowski",
   "license": "Apache-2.0",

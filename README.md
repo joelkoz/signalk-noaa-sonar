@@ -1,6 +1,6 @@
 # signalk-noaa-sonar-charts
 
-![screenshot](noaa-sonar-charts-screenshot.png)
+![screenshot](https://raw.githubusercontent.com/joelkoz/signalk-noaa-sonar-charts/main/docs/screenshots/noaa-sonar-charts-screenshot.jpg)
 
 A Signal K chart provider for high resolution underwater relief charts around the eastern
 United States and parts of the Caribbean. It adds three chart layers to Freeboard-SK and serves their tiles
@@ -17,7 +17,7 @@ The layers are pre-baked with set opacities so they should play well with other 
 cover the land features of your base chart. If you have any difficulties, change the stack order. The HiRes relief is best when its the top layer.
 
 ## Coverage area
-![coverage](bluetopo-coverage.png)
+![coverage](https://raw.githubusercontent.com/joelkoz/signalk-noaa-sonar-charts/main/bluetopo-coverage.jpg)
 
 ## Requirements
 
