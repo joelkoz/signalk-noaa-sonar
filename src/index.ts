@@ -10,7 +10,6 @@ import { CHARTS, ChartDef, cacheBaseName } from './charts'
 import { TileCache } from './cache'
 import { LandMask } from './landmask'
 import { buildLandDb } from './landbuild'
-import { produceTile } from './produce'
 import { validateTileCoords } from './validate'
 
 const TILE_BASE = '/signalk/noaa-sonar/chart-tiles'
@@ -151,6 +150,13 @@ module.exports = (app: ChartProviderApp): Plugin => {
     }
 
     try {
+      // Lazy-load the tile producer (and its native `sharp` dependency) only
+      // on a cache miss. Keeping it out of the module's static import graph
+      // means the plugin loads, exposes its schema, and starts even on hosts
+      // where sharp's native binary cannot be mapped (e.g. the sandboxed
+      // signalk-plugin-registry CI). Rendering still needs sharp; serving
+      // already-cached tiles does not.
+      const { produceTile } = await import('./produce')
       const png = await produceTile(
         chart,
         cache,
