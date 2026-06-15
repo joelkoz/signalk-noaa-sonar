@@ -1,0 +1,10 @@
+name: Signal K plugin CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  plugin-ci:
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master

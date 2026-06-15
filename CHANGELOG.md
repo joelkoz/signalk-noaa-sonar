@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-06-15
 
 ### Fixed
 - Stop the charts (and the Signal K server) from locking up when BlueTopo or the
@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugin drops into cache-only ("offline") mode for 30 seconds before trying the
   upstream again, so a struggling provider can't stall the chart. Offline mode
   is also entered on any upstream error, not just timeouts.
+- Offline smoke-test suite (`npm test`) covering plugin load, schema, start/stop,
+  and the zoom-floor behaviour, plus a Signal K plugin-CI GitHub Actions
+  workflow.
 
 ### Changed
 - Hard-code a minimum serve zoom of **8** for all charts (advertised in the
