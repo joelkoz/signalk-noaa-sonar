@@ -76,14 +76,47 @@ applies the same factor (`--opacity`, default 0.75).
 
 ## Tile request flow (per chart)
 
-1. Validate `z/x/y`. Cache **hit** (in `tiles`) → serve.
-2. **Known-empty** (in `.progress` `visited`, not in `tiles`) → 404, no refetch.
-3. `fetchOnMiss` off → 404.
-4. Miss → producer:
+1. Validate `z/x/y`. **Below the chart's `minzoom` floor** (`MIN_SERVE_ZOOM`) →
+   404 immediately, no upstream/cache touch (see *Resilience*).
+2. Cache **hit** (in `tiles`) → serve.
+3. **Known-empty** (in `.progress` `visited`, not in `tiles`) → 404, no refetch.
+4. `fetchOnMiss` off **or offline cooldown active** → 404.
+5. Miss → producer, bounded by a per-request time budget (see *Resilience*):
    - **exportImage**: fetch one 256px tile; empty → `markEmpty`; else store+serve.
    - **wmts**: fetch the **parent 512px** tile `(z-1, x>>1, y>>1)`; mask land
-     (if ready); split into the **four 256px children** at `z`; store/`markEmpty`
-     each; serve the requested one. One upstream fetch fills all four siblings.
+     (if ready **and** `z >= MASK_MIN_ZOOM`); split into the **four 256px
+     children** at `z`; store/`markEmpty` each; serve the requested one. One
+     upstream fetch fills all four siblings.
+
+## Resilience — zoom floors, time budget, offline mode (src/charts.ts, source.ts, index.ts)
+
+Added after low-zoom viewing locked up the chart/server (issue: BlueTopo +
+NOAA-BAG at small scales). Constants live in `src/charts.ts`; the request budget
+and cooldown in `src/index.ts`.
+
+- **`MIN_SERVE_ZOOM` (8)** — hard floor for all charts. Set as each `ChartDef`'s
+  `minzoom`, so it's **advertised in the chart metadata** (`chartMeta`) *and*
+  enforced server-side in `handleTile` as a guard for clients that ignore it.
+  Below it the upstreams add no usable detail and misbehave: the NOAA BAG
+  ImageServer takes 8–13 s to render a low-zoom world bbox, and BlueTopo's WMTS
+  gridset only covers US waters.
+- **`MASK_MIN_ZOOM` (12)** — below this, land masking is **skipped** (served
+  unmasked). At low zoom the parent-tile bbox pulls in so much coastline that the
+  mask SVG overran libvips' XML parse limit (`XML_PARSE_HUGE`). Applied inside
+  the shared `produceWmts`, so the bulk tool follows the same rule.
+- **Request budget (`REQUEST_BUDGET_MS`, 4 s)** — `handleTile` runs the producer
+  under an `AbortController`; the signal is threaded through `produceTile` →
+  `fetch*` → `getImage`. On expiry the request answers **404 (absent) without
+  `markEmpty`** — a transient failure must never permanently hide a tile.
+- **Offline cooldown (`OFFLINE_COOLDOWN_MS`, 30 s)** — any producer
+  timeout/error trips cache-only mode (`offlineUntil`); during it, misses 404
+  immediately (as if `fetchOnMiss` were off) so a struggling upstream isn't
+  hammered. Auto-clears after the cooldown.
+- **`TileOutOfRange`** — BlueTopo's GeoWebCache returns HTTP 400 `TileOutOfRange`
+  for tiles outside its gridset extent. `source.ts` treats that as **empty**
+  (negative-cached, not retried) — it is a permanent "no coverage here", distinct
+  from a transient error. With the z8 floor this is now rare (it was the original
+  18 s-per-tile retry storm).
 
 ## Invariants — DO NOT BREAK
 
@@ -109,8 +142,9 @@ applies the same factor (`--opacity`, default 0.75).
   in `land(id, coords)`, indexed by `land_rtree(id, minx,maxx,miny,maxy)`.
 - **Apply**: `LandMask.maskSvg(tileBBox3857, sizePx)` bbox-queries the R*Tree,
   projects ring coords to pixels, returns an SVG (land filled white) or `null`
-  (no land). `index.ts` composites it with `sharp` blend **`dest-out`** → land
-  becomes transparent. Masking is done at 512 **before** the 4-way split.
+  (no land). `produceWmts` (in `produce.ts`) composites it with `sharp` blend
+  **`dest-out`** → land becomes transparent. Masking is done at 512 **before**
+  the 4-way split, and **only at `z >= MASK_MIN_ZOOM`** (see *Resilience*).
 - **Async/ready**: the land DB builds in the background on first run; until
   `landMask.ready`, BlueTopo tiles are served **unmasked** (acceptable; they get
   re-masked once tiles are re-requested after a cache miss — note already-cached
@@ -151,11 +185,25 @@ cd ~/.signalk && npm link signalk-noaa-sonar-charts
   resumable. Uses `chart.opacity` (the plugin's config override doesn't apply
   here). Selectors resolve `+/-{all,hi,relief,color}` left-to-right (default
   `+all`).
-- No bundled runner; behavior was validated with fake-`app` harnesses covering:
-  mask alignment (synthetic land polygon erases exactly the right pixels), 3-chart
-  metadata, sonar fetch (256, unmasked), BlueTopo retile+mask+sibling-caching,
-  negative caching, cache-only mode, and the bulk tool filling all three caches.
-  Recreate that style of check after changes to request handling or tile math.
+- **Tests**: `npm test` (`pretest` runs `tsc` first) → `node --test` runs
+  `test/smoke.test.js`. This is the suite the Signal K plugin registry scores
+  (it clones the repo and runs `npm install && npm test`). It is **offline** —
+  no network, no native `sharp`: it drives the plugin through a fake `app`,
+  asserting load / `schema()` / `start()`/`stop()`, that chart metadata
+  advertises `MIN_SERVE_ZOOM`, and that below-floor / unknown-id tile requests
+  404 without touching the upstream or cache. **Gotcha:** the test seeds a valid
+  empty `land.sqlite` at `<dataDir>/land.sqlite` (the path `getDataDirPath()`
+  resolves to) so `start()`'s background land-mask init skips the one-time
+  coastline **download** — otherwise the test hangs on a real network fetch.
+- For deeper changes to request handling or tile math, also validate with the
+  fake-`app` harness style this project has used: mask alignment (synthetic land
+  polygon erases exactly the right pixels), BlueTopo retile+mask+sibling-caching,
+  negative caching, cache-only/offline mode, and the bulk tool filling all three
+  caches.
+- **CI**: `.github/workflows/signalk-ci.yml` calls the shared
+  `SignalK/signalk-server/.github/workflows/plugin-ci.yml@master` (clears the
+  registry's −10 no-CI penalty; the penalty only fully clears once a CI run
+  exists on the exact commit published to npm).
 
 ## Native dependencies & the App Store
 
