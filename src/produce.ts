@@ -15,7 +15,7 @@
  */
 
 import sharp from 'sharp'
-import { ChartDef } from './charts'
+import { ChartDef, MASK_MIN_ZOOM } from './charts'
 import { TileCache } from './cache'
 import { LandMask } from './landmask'
 import { fetchExportImage, fetchWmts, isFullyTransparent } from './source'
@@ -55,10 +55,11 @@ async function produceExport(
   z: number,
   x: number,
   y: number,
-  opacity: number
+  opacity: number,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   if (chart.source.kind !== 'exportimage') return null
-  const res = await fetchExportImage(chart.source.serviceUrl, z, x, y, OUT_PX)
+  const res = await fetchExportImage(chart.source.serviceUrl, z, x, y, OUT_PX, signal)
   if (res.status === 'error') throw new Error('upstream error')
   if (res.status === 'empty' || !res.body) {
     cache.markEmpty(z, x, y)
@@ -83,7 +84,8 @@ async function produceWmts(
   z: number,
   x: number,
   y: number,
-  opacity: number
+  opacity: number,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   if (chart.source.kind !== 'wmts') return null
   const pz = z - 1
@@ -96,7 +98,8 @@ async function produceWmts(
     chart.source.format,
     pz,
     pcol,
-    prow
+    prow,
+    signal
   )
   if (res.status === 'error') throw new Error('upstream error')
   if (res.status === 'empty' || !res.body) {
@@ -105,8 +108,11 @@ async function produceWmts(
   }
 
   // Mask land out of the 512 and bake in the layer opacity before splitting.
+  // Skip masking below MASK_MIN_ZOOM: the parent-tile bbox is large enough there
+  // that the coastline SVG overruns libvips' XML limit, and the detail isn't
+  // visible at that scale anyway.
   const composites: sharp.OverlayOptions[] = []
-  if (chart.mask && landMask?.ready) {
+  if (chart.mask && landMask?.ready && z >= MASK_MIN_ZOOM) {
     const svg = landMask.maskSvg(tileBBox3857(pcol, prow, pz), WMTS_NATIVE_PX)
     if (svg) composites.push({ input: svg, blend: 'dest-out' })
   }
@@ -144,9 +150,10 @@ export function produceTile(
   z: number,
   x: number,
   y: number,
-  opacity: number
+  opacity: number,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   return chart.source.kind === 'wmts'
-    ? produceWmts(chart, cache, landMask, z, x, y, opacity)
-    : produceExport(chart, cache, z, x, y, opacity)
+    ? produceWmts(chart, cache, landMask, z, x, y, opacity, signal)
+    : produceExport(chart, cache, z, x, y, opacity, signal)
 }

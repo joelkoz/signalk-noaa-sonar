@@ -44,6 +44,21 @@ const BLUETOPO_WMTS = 'https://nowcoast.noaa.gov/geoserver/gwc/service/wmts'
 // so existing caches (e.g. noaa-sonar.mbtiles) stay valid.
 export const cacheBaseName = (id: string): string => id.replace(/^_ns\d+-/, '')
 
+// Below this zoom the charts add no usable detail and the upstreams misbehave:
+// the NOAA BAG ImageServer takes 8–13s to render a low-zoom world bbox, and the
+// BlueTopo WMTS gridset only defines tiles over US waters (world tiles return
+// HTTP 400 TileOutOfRange). So we never request below it — see the bulk tool's
+// matching DEFAULT_MIN_ZOOM. Probed 2026-06: BlueTopo serves data at every zoom
+// but masking explodes; NOAA BAG is only responsive at z7+. z8 covers both.
+export const MIN_SERVE_ZOOM = 8
+
+// Land masking pulls every coastline polygon touching the (large, at low zoom)
+// parent-tile bbox into one SVG; below this zoom that SVG balloons past
+// libvips' XML parse limit ("XML_PARSE_HUGE"). Coastline detail isn't visible
+// at this scale anyway and BlueTopo over land is nodata/transparent, so we skip
+// the mask below it and serve unmasked.
+export const MASK_MIN_ZOOM = 12
+
 export const CHARTS: ChartDef[] = [
   {
     id: '_ns01-noaa-sonar',
@@ -52,7 +67,7 @@ export const CHARTS: ChartDef[] = [
     source: { kind: 'exportimage', serviceUrl: NOAA_BAG },
     mask: false, // exportImage nodata is already transparent
     opacity: 0.75,
-    minzoom: 1,
+    minzoom: MIN_SERVE_ZOOM,
     maxzoom: 18
   },
   {
@@ -68,7 +83,7 @@ export const CHARTS: ChartDef[] = [
     },
     mask: true,
     opacity: 0.5,
-    minzoom: 1,
+    minzoom: MIN_SERVE_ZOOM,
     maxzoom: 21 // BlueTopo native gridset is 512px to z20 -> 256px to z21
   },
   {
@@ -84,7 +99,7 @@ export const CHARTS: ChartDef[] = [
     },
     mask: true,
     opacity: 0.3,
-    minzoom: 1,
+    minzoom: MIN_SERVE_ZOOM,
     maxzoom: 21
   }
 ]

@@ -13,6 +13,12 @@ import { buildLandDb } from './landbuild'
 import { validateTileCoords } from './validate'
 
 const TILE_BASE = '/signalk/noaa-sonar/chart-tiles'
+// A single on-demand tile fetch may not hold the request longer than this; on
+// expiry we answer as "tile absent" so one bad upstream can never stall a chart.
+const REQUEST_BUDGET_MS = 4000
+// After an upstream timeout/error we drop into cache-only ("offline") mode for
+// this long, so a struggling provider isn't hammered tile-after-tile.
+const OFFLINE_COOLDOWN_MS = 30000
 const V1 = '/signalk/v1/api/resources'
 const V2 = '/signalk/v2/api/resources'
 const WORLD_BOUNDS: [number, number, number, number] = [
@@ -45,6 +51,10 @@ module.exports = (app: ChartProviderApp): Plugin => {
   let landMask: LandMask | null = null
   let routesRegistered = false
   let providerRegistered = false
+  // Epoch ms until which on-demand fetching is suspended (cache-only mode)
+  // after an upstream timeout/error. 0 = online.
+  let offlineUntil = 0
+  const isOffline = () => Date.now() < offlineUntil
 
   // Plugin-owned data dir (<configPath>/plugin-config-data/<pluginId>).
   const getDataDirPath = (app as unknown as { getDataDirPath?: () => string }).getDataDirPath
@@ -138,17 +148,32 @@ module.exports = (app: ChartProviderApp): Plugin => {
       return
     }
 
+    // Below the chart's floor the upstreams add no usable detail and misbehave
+    // (slow world renders, out-of-range gridset tiles). Answer "absent" without
+    // touching the upstream or the cache. Clients honour the advertised minzoom;
+    // this guards against any that don't.
+    if (iz < chart.minzoom) {
+      res.sendStatus(404)
+      return
+    }
+
     const cached = cache.getTile(iz, ix, iy)
     if (cached) return sendPng(res, cached)
     if (cache.isVisited(iz, ix, iy)) {
       res.sendStatus(404) // known empty
       return
     }
-    if (!props.fetchOnMiss) {
+    // Cache-only when the user disabled fetch-on-miss, or while we are riding
+    // out an upstream outage (offline cooldown). Either way: behave as absent.
+    if (!props.fetchOnMiss || isOffline()) {
       res.sendStatus(404)
       return
     }
 
+    // Bound the on-demand fetch: if it can't deliver within the budget, abort
+    // the upstream request and answer "absent" so the chart keeps moving.
+    const deadline = new AbortController()
+    const timer = setTimeout(() => deadline.abort(), REQUEST_BUDGET_MS)
     try {
       // Lazy-load the tile producer (and its native `sharp` dependency) only
       // on a cache miss. Keeping it out of the module's static import graph
@@ -164,13 +189,27 @@ module.exports = (app: ChartProviderApp): Plugin => {
         iz,
         ix,
         iy,
-        opacityFor(chart)
+        opacityFor(chart),
+        deadline.signal
       )
       if (png) sendPng(res, png)
       else res.sendStatus(404)
     } catch (e) {
-      app.error(`noaa-sonar ${identifier} ${iz}/${ix}/${iy}: ${(e as Error).message}`)
-      res.sendStatus(502)
+      // Timeout or upstream error: trip cache-only mode for the cooldown so we
+      // stop hammering a struggling provider, and answer "absent" WITHOUT
+      // negative-caching — a transient failure must not permanently hide a tile
+      // (genuine no-coverage tiles are negative-cached inside produceTile).
+      offlineUntil = Date.now() + OFFLINE_COOLDOWN_MS
+      const why = deadline.signal.aborted
+        ? `timed out after ${REQUEST_BUDGET_MS}ms`
+        : (e as Error).message
+      app.error(
+        `noaa-sonar ${identifier} ${iz}/${ix}/${iy}: ${why} — ` +
+          `cache-only for ${OFFLINE_COOLDOWN_MS / 1000}s`
+      )
+      res.sendStatus(404)
+    } finally {
+      clearTimeout(timer)
     }
   }
 

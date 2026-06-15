@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Stop the charts (and the Signal K server) from locking up when BlueTopo or the
+  NOAA hi-res relief layer is viewed zoomed out. Three low-zoom failure modes
+  were compounding: BlueTopo's WMTS gridset only covers US waters, so world
+  tiles returned `HTTP 400 TileOutOfRange` that were retried as transient errors
+  (~18s per tile before a 502); the land-mask SVG grew past libvips' XML parse
+  limit (`XML_PARSE_HUGE`); and the NOAA BAG ImageServer takes 8–13s to render a
+  low-zoom world bbox. `TileOutOfRange` is now treated as "no coverage" (cached,
+  not retried), and the layers are no longer requested at zooms where they add no
+  usable detail (see below).
+
+### Added
+- On-demand tile fetches now have a 4-second time budget. If a tile can't be
+  produced in time (slow or failing upstream), the request returns as if the
+  tile is simply absent — without permanently marking it missing — and the
+  plugin drops into cache-only ("offline") mode for 30 seconds before trying the
+  upstream again, so a struggling provider can't stall the chart. Offline mode
+  is also entered on any upstream error, not just timeouts.
+
+### Changed
+- Hard-code a minimum serve zoom of **8** for all charts (advertised in the
+  chart metadata, so clients stop requesting lower zooms, and enforced
+  server-side as a guard). Below z8 the upstreams add no usable detail and
+  misbehave.
+- Skip land masking below zoom **12**. The mask only matters once coastline
+  detail is visible, and at low zoom its coastline SVG overran libvips' parser.
+  BlueTopo over land is nodata/transparent, so the unmasked low-zoom view is
+  unaffected visually. The bulk pre-fill tool shares this logic and so behaves
+  consistently.
+
 ## [1.1.2] - 2026-06-09
 
 ### Fixed
